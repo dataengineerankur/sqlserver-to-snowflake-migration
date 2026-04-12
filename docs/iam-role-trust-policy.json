@@ -1,0 +1,25 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowOnlyThisRepo",
+      "Effect": "Allow",
+      "Principal": {
+        "Federated": "arn:aws:iam::244206439389:oidc-provider/token.actions.githubusercontent.com"
+      },
+      "Action": "sts:AssumeRoleWithWebIdentity",
+      "Condition": {
+        "StringEquals": {
+          "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+          "token.actions.githubusercontent.com:sub": [
+            "repo:dataengineerankur/sqlserver-to-snowflake-migration:ref:refs/heads/main",
+            "repo:dataengineerankur/sqlserver-to-snowflake-migration:environment:production"
+          ]
+        },
+        "StringLike": {
+          "token.actions.githubusercontent.com:sub": "repo:dataengineerankur/sqlserver-to-snowflake-migration:*"
+        }
+      }
+    }
+  ]
+}
