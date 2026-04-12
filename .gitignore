@@ -1,0 +1,44 @@
+# Secrets
+.env
+*.env
+!*.env.example
+*.tfvars
+!*.tfvars.example
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform.lock.hcl
+
+# CDK
+cdk.out/
+node_modules/
+*.js
+*.d.ts
+!jest.config.js
+
+# dbt
+dbt/target/
+dbt/logs/
+dbt/.user.yml
+dbt/dbt_packages/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Reports (generated at runtime)
+sqlserver/reports/
+14_reports/

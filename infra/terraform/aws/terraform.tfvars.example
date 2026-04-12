@@ -1,0 +1,84 @@
+aws_region                     = "us-east-1"
+aws_profile                    = "default"
+project_name                   = "dms-snowpipe"
+environment                    = "dev"
+bucket_name                    = ""
+
+postgres_host                  = ""
+postgres_port                  = 5432
+postgres_db                    = "source_db"
+postgres_user                  = "app_user"
+postgres_password              = "replace-me"
+
+dms_replication_instance_class = "dms.t3.medium"
+dms_allocated_storage_gb       = 50
+
+use_rds                        = true
+rds_instance_class             = "db.t3.micro"
+rds_allocated_storage_gb       = 20
+rds_engine_version             = "15.16"
+rds_parameter_group_family     = "postgres15"
+rds_publicly_accessible        = true
+rds_allowed_cidrs              = ["YOUR_PUBLIC_IP/32"]
+
+# Optional: if empty, default VPC/subnets are used
+dms_subnet_ids                 = []
+dms_vpc_id                     = null
+
+# Populate after Snowflake integration is created
+snowflake_aws_iam_user_arn      = ""
+snowflake_external_id          = ""
+
+# Optional: populate with Snowpipe notification channels after Snowflake apply
+snowpipe_sqs_queue_arns        = {}
+
+enable_redshift                = false
+enable_glue_athena             = true
+enable_redshift_serverless     = false
+# Redshift settings (only needed if enable_redshift or enable_redshift_serverless = true)
+# redshift_cluster_identifier    = "dms-snowpipe-redshift"
+# redshift_database              = "analytics"
+# redshift_master_username       = "admin"
+# redshift_master_password       = "replace-me"
+# redshift_node_type             = "dc2.large"
+# redshift_publicly_accessible   = true
+# redshift_allowed_cidrs         = ["YOUR_PUBLIC_IP/32"]
+# redshift_serverless_namespace  = "dms-redshift-namespace"
+# redshift_serverless_workgroup  = "dms-redshift-workgroup"
+# redshift_serverless_base_capacity = 8
+
+glue_job_name                  = "dms-glue-redshift-load"
+glue_silver_job_name           = "dms-glue-silver-transform"
+glue_gold_job_name             = "dms-glue-gold-transform"
+glue_silver_customers_job_name = "dms-glue-silver-customers"
+glue_silver_products_job_name  = "dms-glue-silver-products"
+glue_silver_orders_job_name    = "dms-glue-silver-orders"
+glue_gold_customers_job_name   = "dms-glue-gold-customers"
+glue_gold_products_job_name    = "dms-glue-gold-products"
+glue_gold_orders_job_name      = "dms-glue-gold-orders"
+glue_raw_ingest_job_name       = "dms-glue-raw-ingest"
+glue_worker_type               = "G.1X"
+glue_number_of_workers         = 2
+glue_timeout_minutes           = 30
+glue_catalog_database_raw      = "dms_datalake"
+glue_catalog_database_bronze   = "bronze"
+glue_catalog_database_silver   = "silver"
+glue_catalog_database_gold     = "gold"
+glue_crawler_raw_name          = "dms-raw-crawler"
+glue_crawler_silver_name       = "dms-silver-crawler"
+glue_crawler_gold_name         = "dms-gold-crawler"
+glue_crawler_bronze_name       = "dms-bronze-crawler"
+
+athena_workgroup_name          = "dms-athena"
+athena_output_prefix           = "athena/results/"
+
+raw_prefix                      = "bronze"
+silver_prefix                   = "glue/silver"
+gold_prefix                     = "glue/gold"
+
+enable_datalake_ingest          = false
+datalake_source_bucket          = "dmt-datalake"
+datalake_source_prefix          = "dms/"
+enable_datalake_notifications   = false
+enable_step_function            = false
+step_function_name              = "dms-datalake-orchestrator"

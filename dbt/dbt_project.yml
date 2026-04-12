@@ -1,0 +1,56 @@
+name: "dms_snowpipe"
+version: "1.0.0"
+config-version: 2
+
+profile: "dms_snowpipe"
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+analysis-paths: ["analysis"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  dms_snowpipe:
+    customers:
+      stg:
+        +schema: "STG"
+        +materialized: view
+      int:
+        +schema: "INT"
+        +materialized: view
+      gold:
+        +schema: "GOLD"
+        +materialized: table
+    products:
+      stg:
+        +schema: "STG"
+        +materialized: view
+      int:
+        +schema: "INT"
+        +materialized: view
+      gold:
+        +schema: "GOLD"
+        +materialized: table
+    orders:
+      stg:
+        +schema: "STG"
+        +materialized: view
+      int:
+        +schema: "INT"
+        +materialized: view
+      gold:
+        +schema: "GOLD"
+        +materialized: table
+    common:
+      gold:
+        +schema: "GOLD"
+        +materialized: table
+
+vars:
+  fct_orders_lookback_days: 7

@@ -1,0 +1,45 @@
+-- ============================================================
+-- SILVER layer: LabERP_DB
+-- ============================================================
+
+USE DATABASE MSSQL_MIGRATION_LAB;
+
+CREATE OR REPLACE TABLE SILVER.ERP_DEPARTMENTS (
+    DEPT_SK         NUMBER          NOT NULL AUTOINCREMENT PRIMARY KEY,
+    DEPT_ID         NUMBER          NOT NULL,
+    DEPT_CODE       VARCHAR(20)     NOT NULL,
+    DEPT_NAME       VARCHAR(120)    NOT NULL,
+    BUDGET_USD      NUMBER(18,2)    NOT NULL,
+    _VALID_FROM     TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _VALID_TO       TIMESTAMP_NTZ,
+    _IS_CURRENT     BOOLEAN         NOT NULL DEFAULT TRUE,
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'LabERP_DB'
+);
+
+CREATE OR REPLACE TABLE SILVER.ERP_EMPLOYEES (
+    EMPLOYEE_SK     NUMBER          NOT NULL AUTOINCREMENT PRIMARY KEY,
+    EMPLOYEE_ID     NUMBER          NOT NULL,
+    DEPT_ID         NUMBER          NOT NULL,
+    EMP_CODE        VARCHAR(20)     NOT NULL,
+    FULL_NAME       VARCHAR(200)    NOT NULL,
+    HIRE_DATE       DATE            NOT NULL,
+    SALARY          NUMBER(18,4)    NOT NULL,
+    -- ROW_VER dropped in Silver (no analytical value)
+    _VALID_FROM     TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _VALID_TO       TIMESTAMP_NTZ,
+    _IS_CURRENT     BOOLEAN         NOT NULL DEFAULT TRUE,
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'LabERP_DB'
+);
+
+CREATE OR REPLACE TABLE SILVER.ERP_PAYROLL_LINES (
+    LINE_SK         NUMBER          NOT NULL AUTOINCREMENT PRIMARY KEY,
+    LINE_ID         NUMBER          NOT NULL,
+    RUN_ID          NUMBER          NOT NULL,
+    EMPLOYEE_ID     NUMBER          NOT NULL,
+    RUN_MONTH       CHAR(7)         NOT NULL,   -- denormalized from PayrollRuns
+    GROSS_PAY       NUMBER(18,4)    NOT NULL,
+    NET_PAY         NUMBER(18,4)    NOT NULL,   -- resolved: GROSS_PAY * 0.92
+    _VALID_FROM     TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _IS_CURRENT     BOOLEAN         NOT NULL DEFAULT TRUE,
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'LabERP_DB'
+);

@@ -1,0 +1,39 @@
+-- ============================================================
+-- BRONZE layer: LabInventory_DB
+-- ============================================================
+
+USE DATABASE MSSQL_MIGRATION_LAB;
+
+CREATE OR REPLACE TABLE BRONZE.INV_WAREHOUSES (
+    WH_ID           NUMBER          NOT NULL,   -- INT IDENTITY
+    WH_CODE         VARCHAR(20)     NOT NULL,   -- NVARCHAR(20) UNIQUE
+    LOCATION        VARCHAR(200)    NOT NULL,
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'LabInventory_DB'
+);
+
+CREATE OR REPLACE TABLE BRONZE.INV_SKU (
+    SKU_ID          NUMBER          NOT NULL,   -- INT IDENTITY
+    SKU_CODE        VARCHAR(40)     NOT NULL,   -- NVARCHAR(40) UNIQUE
+    DESCR           VARCHAR(200)    NOT NULL,
+    UNIT_COST       NUMBER(18,4)    NOT NULL,
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'LabInventory_DB'
+);
+
+CREATE OR REPLACE TABLE BRONZE.INV_STOCK_MOVEMENTS (
+    MOV_ID          NUMBER          NOT NULL,   -- BIGINT IDENTITY
+    WH_ID           NUMBER          NOT NULL,   -- FK → Warehouses
+    SKU_ID          NUMBER          NOT NULL,   -- FK → Sku
+    QTY_CHANGE      NUMBER          NOT NULL,   -- INT (positive=in, negative=out)
+    REASON          VARCHAR(80)     NOT NULL,
+    MOV_DATE        TIMESTAMP_NTZ(3),           -- DATETIME2(3)
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'LabInventory_DB'
+);

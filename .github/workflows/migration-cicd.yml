@@ -1,0 +1,165 @@
+name: Migration CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "airflow/**"
+      - "dbt/**"
+      - "glue/**"
+      - "snowflake_ddl/**"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC
+  contents: read
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+
+jobs:
+  # ─── PR validation: synth + lint only, no deploy ───────────────────────────
+  validate-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # CDK synth
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: infra/aws-cdk/package-lock.json
+
+      - name: Install CDK dependencies
+        working-directory: infra/aws-cdk
+        run: npm ci
+
+      - name: CDK synth (validate stacks compile)
+        working-directory: infra/aws-cdk
+        env:
+          MSSQL_PROJECT_NAME: ${{ secrets.MSSQL_PROJECT_NAME }}
+        run: npx cdk synth --all --quiet
+
+      # Snowflake Terraform validate
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      - name: Terraform init (Snowflake)
+        working-directory: infra/terraform/snowflake
+        env:
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PRIVATE_KEY_PATH: /dev/null
+        run: terraform init -backend=false
+
+      - name: Terraform validate (Snowflake)
+        working-directory: infra/terraform/snowflake
+        run: terraform validate
+
+      # AWS DMS Terraform validate
+      - name: Terraform init (AWS DMS)
+        working-directory: infra/terraform/aws
+        run: terraform init -backend=false
+
+      - name: Terraform validate (AWS DMS)
+        working-directory: infra/terraform/aws
+        run: terraform validate
+
+      # dbt parse check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dbt
+        run: pip install dbt-snowflake==1.8.0
+
+      - name: dbt parse (model syntax check)
+        working-directory: dbt
+        env:
+          DBT_PROFILES_DIR: .
+        run: dbt parse --profiles-dir . --profile mssql_migration --target dev || true
+
+  # ─── Deploy: runs on merge to main ─────────────────────────────────────────
+  deploy-main:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # CDK deploy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: infra/aws-cdk/package-lock.json
+
+      - name: Install CDK dependencies
+        working-directory: infra/aws-cdk
+        run: npm ci
+
+      - name: CDK deploy all stacks
+        working-directory: infra/aws-cdk
+        env:
+          MSSQL_PROJECT_NAME: ${{ secrets.MSSQL_PROJECT_NAME }}
+        run: npx cdk deploy --all --require-approval never
+
+      # Snowflake Terraform apply
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.7.5"
+
+      - name: Terraform init (Snowflake)
+        working-directory: infra/terraform/snowflake
+        env:
+          AWS_DEFAULT_REGION: ${{ env.AWS_REGION }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="key=snowflake/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Terraform apply (Snowflake)
+        working-directory: infra/terraform/snowflake
+        env:
+          SNOWFLAKE_ACCOUNT:        ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          SNOWFLAKE_USER:           ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PRIVATE_KEY_PASSPHRASE: ${{ secrets.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE }}
+          TF_VAR_aws_dms_bucket:    ${{ secrets.DMS_BUCKET_NAME }}
+          TF_VAR_aws_glue_bucket:   ${{ secrets.GLUE_BUCKET_NAME }}
+          TF_VAR_aws_storage_integration_role_arn: ${{ secrets.SNOWFLAKE_S3_ROLE_ARN }}
+        run: terraform apply -auto-approve
+
+      # AWS DMS Terraform apply
+      - name: Terraform init (AWS DMS)
+        working-directory: infra/terraform/aws
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
+            -backend-config="key=aws-dms/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Terraform apply (AWS DMS)
+        working-directory: infra/terraform/aws
+        env:
+          TF_VAR_project_name: ${{ secrets.MSSQL_PROJECT_NAME }}
+        run: terraform apply -auto-approve

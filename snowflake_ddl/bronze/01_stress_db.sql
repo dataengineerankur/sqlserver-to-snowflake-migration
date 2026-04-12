@@ -1,0 +1,151 @@
+-- ============================================================
+-- BRONZE layer: SnowConvertStressDB
+-- Source: SQL Server dbo.* (SnowConvertStressDB)
+-- Pattern: faithful typed replica + DMS metadata columns
+-- SCT type mapping applied — no business logic
+-- ============================================================
+
+USE DATABASE MSSQL_MIGRATION_LAB;
+CREATE SCHEMA IF NOT EXISTS BRONZE;
+
+-- ── Categories ───────────────────────────────────────────────
+CREATE OR REPLACE TABLE BRONZE.CATEGORIES (
+    -- source columns (type-mapped from T-SQL)
+    CATEGORY_ID     NUMBER          NOT NULL,   -- INT IDENTITY(1,1)
+    CATEGORY_NAME   VARCHAR(100)    NOT NULL,   -- NVARCHAR(100)
+    DESCRIPTION     VARCHAR(500),               -- NVARCHAR(500) NULL
+    -- DMS / pipeline metadata
+    _DMS_OPERATION  VARCHAR(1),                 -- I=Insert U=Update D=Delete
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB',
+    CONSTRAINT PK_BRONZE_CATEGORIES PRIMARY KEY (_SOURCE_DB, CATEGORY_ID) NOT ENFORCED
+);
+
+-- ── Customers ────────────────────────────────────────────────
+CREATE OR REPLACE TABLE BRONZE.CUSTOMERS (
+    CUSTOMER_ID     NUMBER          NOT NULL,   -- INT IDENTITY(1,1)
+    CUSTOMER_CODE   VARCHAR(20)     NOT NULL,   -- NVARCHAR(20) UNIQUE
+    FULL_NAME       VARCHAR(200)    NOT NULL,   -- NVARCHAR(200)
+    EMAIL           VARCHAR(320),               -- NVARCHAR(320) NULL
+    COUNTRY         VARCHAR(100)    NOT NULL,   -- NVARCHAR(100) DEFAULT 'US'
+    CREATED_AT      TIMESTAMP_NTZ(3),           -- DATETIME2(3)
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB',
+    CONSTRAINT PK_BRONZE_CUSTOMERS PRIMARY KEY (_SOURCE_DB, CUSTOMER_ID) NOT ENFORCED
+);
+
+-- ── Products ─────────────────────────────────────────────────
+CREATE OR REPLACE TABLE BRONZE.PRODUCTS (
+    PRODUCT_ID      NUMBER          NOT NULL,   -- INT IDENTITY(1,1)
+    CATEGORY_ID     NUMBER          NOT NULL,   -- INT FK → Categories
+    SKU             VARCHAR(50)     NOT NULL,   -- NVARCHAR(50) UNIQUE
+    PRODUCT_NAME    VARCHAR(200)    NOT NULL,   -- NVARCHAR(200)
+    LIST_PRICE      NUMBER(18,4)    NOT NULL,   -- DECIMAL(18,4)
+    IS_ACTIVE       BOOLEAN         NOT NULL,   -- BIT DEFAULT 1
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB'
+    -- FK: CATEGORY_ID → CATEGORIES.CATEGORY_ID (not enforced)
+);
+
+-- ── Orders ───────────────────────────────────────────────────
+CREATE OR REPLACE TABLE BRONZE.ORDERS (
+    ORDER_ID        NUMBER          NOT NULL,   -- BIGINT IDENTITY(1,1)
+    CUSTOMER_ID     NUMBER          NOT NULL,   -- INT FK → Customers
+    ORDER_DATE      DATE            NOT NULL,   -- DATE
+    STATUS          VARCHAR(30)     NOT NULL,   -- NVARCHAR(30) DEFAULT 'Open'
+    TOTAL_AMOUNT    NUMBER(18,4)    NOT NULL,   -- DECIMAL(18,4)
+    NOTES           VARCHAR(500),               -- NVARCHAR(500) NULL
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB'
+);
+
+-- ── OrderItems ───────────────────────────────────────────────
+CREATE OR REPLACE TABLE BRONZE.ORDER_ITEMS (
+    ORDER_ITEM_ID   NUMBER          NOT NULL,   -- BIGINT IDENTITY(1,1)
+    ORDER_ID        NUMBER          NOT NULL,   -- BIGINT FK → Orders
+    PRODUCT_ID      NUMBER          NOT NULL,   -- INT FK → Products
+    QUANTITY        NUMBER          NOT NULL,   -- INT CHECK (Quantity > 0)
+    UNIT_PRICE      NUMBER(18,4)    NOT NULL,   -- DECIMAL(18,4)
+    LINE_TOTAL      NUMBER(18,4),               -- AS (Qty*UnitPrice) PERSISTED — materialized at load
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB'
+);
+
+-- ── Stress / audit tables ────────────────────────────────────
+CREATE OR REPLACE TABLE BRONZE.MIGRATION_AUDIT_LOG (
+    AUDIT_ID        NUMBER          NOT NULL,   -- BIGINT IDENTITY
+    TABLE_NAME      VARCHAR(128)    NOT NULL,   -- SYSNAME
+    DML_ACTION      VARCHAR(10)     NOT NULL,   -- NVARCHAR(10)
+    ROW_PK          VARCHAR(200),
+    OLD_PAYLOAD     VARCHAR,                    -- NVARCHAR(MAX)
+    NEW_PAYLOAD     VARCHAR,                    -- NVARCHAR(MAX)
+    SQL_TRIGGER     VARCHAR(256),
+    NEST_LEVEL      NUMBER,
+    CHANGED_AT      TIMESTAMP_NTZ(3),
+    CHANGED_BY      VARCHAR(256),
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB'
+);
+
+CREATE OR REPLACE TABLE BRONZE.ORDER_EVENT_QUEUE (
+    EVENT_ID        NUMBER          NOT NULL,
+    ORDER_ID        NUMBER          NOT NULL,
+    EVENT_TYPE      VARCHAR(40)     NOT NULL,
+    PAYLOAD         VARCHAR,
+    CREATED_AT      TIMESTAMP_NTZ(3),
+    PROCESSED       BOOLEAN,
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB'
+);
+
+CREATE OR REPLACE TABLE BRONZE.ORDERS_ARCHIVE (
+    ARCHIVE_ID      NUMBER          NOT NULL,
+    ORDER_ID        NUMBER          NOT NULL,
+    CUSTOMER_ID     NUMBER          NOT NULL,
+    ORDER_DATE      DATE            NOT NULL,
+    STATUS          VARCHAR(30)     NOT NULL,
+    TOTAL_AMOUNT    NUMBER(18,4)    NOT NULL,
+    NOTES           VARCHAR(500),
+    ARCHIVED_AT     TIMESTAMP_NTZ(3),
+    ARCHIVE_REASON  VARCHAR(200),
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB'
+);
+
+CREATE OR REPLACE TABLE BRONZE.PRODUCT_PRICE_HISTORY (
+    HISTORY_ID      NUMBER          NOT NULL,
+    PRODUCT_ID      NUMBER          NOT NULL,
+    OLD_PRICE       NUMBER(18,4),
+    NEW_PRICE       NUMBER(18,4)    NOT NULL,
+    CHANGED_AT      TIMESTAMP_NTZ(3),
+    CHANGED_BY      VARCHAR(256),
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB'
+);
+
+CREATE OR REPLACE TABLE BRONZE.CATEGORY_CLOSURE (
+    ANCESTOR_ID     NUMBER          NOT NULL,
+    DESCENDANT_ID   NUMBER          NOT NULL,
+    DEPTH           NUMBER          NOT NULL,
+    _DMS_OPERATION  VARCHAR(1),
+    _DMS_COMMIT_TS  TIMESTAMP_NTZ(6),
+    _LOADED_AT      TIMESTAMP_NTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP(),
+    _SOURCE_DB      VARCHAR(128)    NOT NULL DEFAULT 'SnowConvertStressDB'
+);

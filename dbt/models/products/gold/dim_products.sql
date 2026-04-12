@@ -1,0 +1,9 @@
+SELECT
+  PRODUCT_ID,
+  SKU,
+  PRODUCT_NAME,
+  CATEGORY,
+  PRICE,
+  CREATED_AT,
+  UPDATED_AT
+FROM {{ ref('int_products') }}

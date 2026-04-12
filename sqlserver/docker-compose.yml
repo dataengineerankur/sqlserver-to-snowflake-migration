@@ -1,0 +1,35 @@
+# SQL Server lab — persistent data + healthcheck.
+# Uses Azure SQL Edge (ARM64 + amd64) so Apple Silicon Macs work reliably.
+# NOTE: Azure SQL Edge is NOT a supported AWS DMS source edition.
+#   → Use the Glue path (approach_glue/) for data extraction from this lab.
+#   → For DMS CDC, use RDS SQL Server Express in AWS (see approach_dms/README.md).
+# Copy .env.example to .env in this directory before starting.
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/azure-sql-edge:latest
+    container_name: snowconvert-sqlserver-lab
+    hostname: snowconvert-sqlserver-lab
+    ports:
+      - "${MSSQL_PORT:-1433}:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD}"
+    volumes:
+      - mssql_lab_data:/var/opt/mssql
+    # Azure SQL Edge image has no sqlcmd; verify engine is listening on 1433.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/1433' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 45s
+    restart: unless-stopped
+
+volumes:
+  mssql_lab_data:
+    name: snowconvert_mssql_lab_data
