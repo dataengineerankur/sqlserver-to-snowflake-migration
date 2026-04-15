@@ -8,7 +8,7 @@ dms_snowpipe:
       password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
       role: "{{ env_var('SNOWFLAKE_ROLE', 'TRANSFORM_ROLE') }}"
       warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'TRANSFORM_WH') }}"
-      database: "{{ env_var('SNOWFLAKE_DATABASE', 'ANALYTICS') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'MSSQL_MIGRATION_LAB') }}"
       schema: "STG"
       threads: 4
       client_session_keep_alive: false

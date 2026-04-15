@@ -4,11 +4,12 @@ config-version: 2
 
 profile: "dms_snowpipe"
 
-model-paths: ["models"]
-macro-paths: ["macros"]
+model-paths:  ["models"]
+macro-paths:  ["macros"]
 analysis-paths: ["analysis"]
-test-paths: ["tests"]
-seed-paths: ["seeds"]
+test-paths:   ["tests"]
+seed-paths:   ["seeds"]
+snapshot-paths: ["snapshots"]
 
 target-path: "target"
 clean-targets:
@@ -47,10 +48,47 @@ models:
       gold:
         +schema: "GOLD"
         +materialized: table
+    erp:
+      stg:
+        +schema: "STG"
+        +materialized: view
+      int:
+        +schema: "INT"
+        +materialized: view
+      gold:
+        +schema: "GOLD"
+        +materialized: table
+    crm:
+      stg:
+        +schema: "STG"
+        +materialized: view
+      int:
+        +schema: "INT"
+        +materialized: view
+      gold:
+        +schema: "GOLD"
+        +materialized: table
+    inventory:
+      stg:
+        +schema: "STG"
+        +materialized: view
+      int:
+        +schema: "INT"
+        +materialized: view
+      gold:
+        +schema: "GOLD"
+        +materialized: table
     common:
       gold:
         +schema: "GOLD"
         +materialized: table
+
+snapshots:
+  dms_snowpipe:
+    +target_database: "{{ env_var('SNOWFLAKE_DATABASE', 'MSSQL_MIGRATION_LAB') }}"
+    +target_schema: "SILVER"
+    +strategy: "check"
+    +invalidate_hard_deletes: true
 
 vars:
   fct_orders_lookback_days: 7

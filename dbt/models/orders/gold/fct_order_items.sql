@@ -1,33 +1,42 @@
 {{ config(
-    materialized = 'incremental',
-    unique_key = 'order_item_id',
-    incremental_strategy = 'merge',
-    on_schema_change = 'append_new_columns'
+    materialized         = 'incremental',
+    unique_key           = 'ORDER_ITEM_ID',
+    incremental_strategy = 'append'
 ) }}
 
-WITH final AS (
-  SELECT
-    ORDER_ITEM_ID,
-    ORDER_ID,
-    CUSTOMER_ID,
-    PRODUCT_ID,
-    SKU,
-    PRODUCT_NAME,
-    CATEGORY,
-    QUANTITY,
-    UNIT_PRICE,
-    LINE_TOTAL,
-    ORDER_DATE,
-    ITEM_UPDATED_AT AS RECORD_UPDATED_AT
-  FROM {{ ref('int_order_items') }}
-)
+/*
+  Gold: order line item fact.
+  Source: int_order_items (already enriched with product info).
+  Replaces SQL Server vw_OrderLineDetail.
+  Append-only: order items never change once created.
+*/
 
-SELECT * FROM final
+SELECT
+    i.ORDER_ITEM_ID,
+    i.ORDER_ID,
+    o.CUSTOMER_ID,
+    o.CUSTOMER_NAME,
+    o.CUSTOMER_COUNTRY,
+    o.ORDER_DATE,
+    TO_CHAR(o.ORDER_DATE, 'YYYY-MM')  AS ORDER_MONTH,
+    i.PRODUCT_ID,
+    i.SKU,
+    i.PRODUCT_NAME,
+    i.CATEGORY_ID,
+    d.CATEGORY_NAME,
+    i.QUANTITY,
+    i.UNIT_PRICE,
+    i.LINE_TOTAL,
+    i._LOADED_AT
+FROM {{ ref('int_order_items') }} AS i
+LEFT JOIN {{ ref('int_orders') }} AS o
+    ON i.ORDER_ID = o.ORDER_ID
+LEFT JOIN {{ source('bronze', 'categories') }} AS d
+    ON i.CATEGORY_ID = d.CATEGORY_ID
+    AND (d._DMS_OPERATION IS NULL OR d._DMS_OPERATION != 'D')
 
 {% if is_incremental() %}
-WHERE RECORD_UPDATED_AT >= DATEADD(
-  day,
-  -{{ var('fct_orders_lookback_days') }},
-  (SELECT COALESCE(MAX(RECORD_UPDATED_AT), '1970-01-01') FROM {{ this }})
+WHERE i._LOADED_AT > (
+    SELECT COALESCE(MAX(_LOADED_AT), '1970-01-01') FROM {{ this }}
 )
 {% endif %}
