@@ -1,49 +1,50 @@
 {{ config(
-    materialized = 'incremental',
-    unique_key = 'order_id',
-    incremental_strategy = 'merge',
-    on_schema_change = 'append_new_columns'
+    materialized         = 'incremental',
+    unique_key           = 'ORDER_ID',
+    incremental_strategy = 'merge'
 ) }}
 
-WITH orders AS (
-  SELECT * FROM {{ ref('int_orders') }}
-),
-items AS (
-  SELECT
-    ORDER_ID,
-    SUM(QUANTITY) AS TOTAL_ITEMS,
-    SUM(LINE_TOTAL) AS GROSS_REVENUE,
-    MAX(ITEM_UPDATED_AT) AS ITEMS_UPDATED_AT
-  FROM {{ ref('int_order_items') }}
-  GROUP BY ORDER_ID
-),
-final AS (
-  SELECT
-    orders.ORDER_ID,
-    orders.CUSTOMER_ID,
-    orders.FIRST_NAME,
-    orders.LAST_NAME,
-    orders.EMAIL,
-    orders.ORDER_STATUS,
-    orders.ORDER_DATE,
-    orders.ORDER_UPDATED_AT,
-    COALESCE(items.TOTAL_ITEMS, 0) AS TOTAL_ITEMS,
-    COALESCE(items.GROSS_REVENUE, 0) AS GROSS_REVENUE,
-    GREATEST(
-      orders.ORDER_UPDATED_AT,
-      COALESCE(items.ITEMS_UPDATED_AT, orders.ORDER_UPDATED_AT)
-    ) AS RECORD_UPDATED_AT
-  FROM orders
-  LEFT JOIN items
-    ON orders.ORDER_ID = items.ORDER_ID
+/*
+  Gold: order fact with enriched analytics fields.
+  Source: int_orders_enriched (snapshot-backed, current state only).
+  Includes line-level aggregates joined from int_order_items.
+  Replaces SQL Server vw_OrderLineDetail + usp_RefreshOrderTotals.
+*/
+
+WITH items AS (
+    SELECT
+        ORDER_ID,
+        COUNT(*)        AS LINE_COUNT,
+        SUM(QUANTITY)   AS TOTAL_QUANTITY,
+        SUM(LINE_TOTAL) AS GROSS_REVENUE
+    FROM {{ ref('int_order_items') }}
+    GROUP BY ORDER_ID
 )
 
-SELECT * FROM final
+SELECT
+    o.ORDER_ID,
+    o.CUSTOMER_ID,
+    o.CUSTOMER_NAME,
+    o.CUSTOMER_EMAIL,
+    o.CUSTOMER_COUNTRY,
+    TO_CHAR(o.ORDER_DATE, 'YYYY-MM')        AS ORDER_MONTH,
+    o.ORDER_DATE,
+    o.STATUS,
+    o.TOTAL_AMOUNT,
+    o.ORDER_VALUE_TIER,
+    o.IS_REPEAT_CUSTOMER,
+    o.DAYS_TO_SHIP,
+    COALESCE(i.LINE_COUNT, 0)               AS LINE_COUNT,
+    COALESCE(i.TOTAL_QUANTITY, 0)           AS TOTAL_QUANTITY,
+    COALESCE(i.GROSS_REVENUE, 0)            AS GROSS_REVENUE,
+    o._VALID_FROM,
+    o._LAST_CHANGED_AT                      AS _UPDATED_AT,
+    o._SOURCE_DB
+FROM {{ ref('int_orders_enriched') }} AS o
+LEFT JOIN items AS i ON o.ORDER_ID = i.ORDER_ID
 
 {% if is_incremental() %}
-WHERE RECORD_UPDATED_AT >= DATEADD(
-  day,
-  -{{ var('fct_orders_lookback_days') }},
-  (SELECT COALESCE(MAX(RECORD_UPDATED_AT), '1970-01-01') FROM {{ this }})
+WHERE o._LAST_CHANGED_AT > (
+    SELECT COALESCE(MAX(_UPDATED_AT), '1970-01-01') FROM {{ this }}
 )
 {% endif %}

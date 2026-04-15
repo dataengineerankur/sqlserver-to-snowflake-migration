@@ -1,99 +1,279 @@
 version: 2
 
+# ────────────────────────────────────────────────────────────────────────────
+# STAGING LAYER  (views over BRONZE — thin rename + type cast only)
+# ────────────────────────────────────────────────────────────────────────────
 models:
+
+  # ── Orders / StressTest ──────────────────────────────────────────────────
   - name: stg_customers
+    description: Staged customers from BRONZE.customers
     columns:
-      - name: customer_id
-        tests:
-          - not_null
-          - unique
-      - name: email
-        tests:
-          - not_null
+      - name: CUSTOMER_ID
+        tests: [not_null, unique]
+      - name: EMAIL
+        tests: [not_null]
 
   - name: stg_products
+    description: Staged products from BRONZE.products
     columns:
-      - name: product_id
-        tests:
-          - not_null
-          - unique
+      - name: PRODUCT_ID
+        tests: [not_null, unique]
 
   - name: stg_orders
+    description: Staged orders from BRONZE.orders
     columns:
-      - name: order_id
-        tests:
-          - not_null
-          - unique
-      - name: customer_id
+      - name: ORDER_ID
+        tests: [not_null, unique]
+      - name: CUSTOMER_ID
         tests:
           - not_null
           - relationships:
               to: ref('stg_customers')
-              field: customer_id
+              field: CUSTOMER_ID
 
   - name: stg_order_items
+    description: Staged order line items from BRONZE.order_items
     columns:
-      - name: order_item_id
-        tests:
-          - not_null
-          - unique
-      - name: order_id
+      - name: ORDER_ITEM_ID
+        tests: [not_null, unique]
+      - name: ORDER_ID
         tests:
           - not_null
           - relationships:
               to: ref('stg_orders')
-              field: order_id
-      - name: product_id
+              field: ORDER_ID
+      - name: PRODUCT_ID
         tests:
           - not_null
           - relationships:
               to: ref('stg_products')
-              field: product_id
+              field: PRODUCT_ID
 
-  - name: dim_customers
+  # ── ERP staging ──────────────────────────────────────────────────────────
+  - name: stg_erp_departments
+    description: Staged ERP departments from BRONZE.erp_departments
     columns:
-      - name: customer_id
-        tests:
-          - not_null
-          - unique
+      - name: DEPT_ID
+        tests: [not_null, unique]
+
+  - name: stg_erp_employees
+    description: Staged ERP employees from BRONZE.erp_employees
+    columns:
+      - name: EMP_ID
+        tests: [not_null, unique]
+
+  - name: stg_erp_payroll_lines
+    description: Staged payroll lines (denormalised with RUN_MONTH from payroll_runs)
+    columns:
+      - name: LINE_ID
+        tests: [not_null, unique]
+      - name: EMP_ID
+        tests: [not_null]
+
+  # ── CRM staging ──────────────────────────────────────────────────────────
+  - name: stg_crm_accounts
+    description: Staged CRM accounts from BRONZE.crm_accounts
+    columns:
+      - name: ACCOUNT_ID
+        tests: [not_null, unique]
+
+  - name: stg_crm_contacts
+    description: Staged CRM contacts from BRONZE.crm_contacts
+    columns:
+      - name: CONTACT_ID
+        tests: [not_null, unique]
+
+  - name: stg_crm_opportunities
+    description: Staged CRM opportunities from BRONZE.crm_opportunities
+    columns:
+      - name: OPP_ID
+        tests: [not_null, unique]
+
+  # ── Inventory staging ────────────────────────────────────────────────────
+  - name: stg_inv_warehouses
+    description: Staged warehouses from BRONZE.inv_warehouses
+    columns:
+      - name: WH_ID
+        tests: [not_null, unique]
+
+  - name: stg_inv_sku
+    description: Staged SKU catalogue from BRONZE.inv_sku
+    columns:
+      - name: SKU_ID
+        tests: [not_null, unique]
+
+  - name: stg_inv_stock_movements
+    description: Staged stock movement journal from BRONZE.inv_stock_movements
+    columns:
+      - name: MOV_ID
+        tests: [not_null, unique]
+
+# ────────────────────────────────────────────────────────────────────────────
+# INTERMEDIATE LAYER  (views over SILVER snapshots — current records only)
+# ────────────────────────────────────────────────────────────────────────────
+
+  # ── Orders / StressTest ──────────────────────────────────────────────────
+  - name: int_customers
+    description: Current customer records from snp_customers (dbt_valid_to IS NULL)
+    columns:
+      - name: CUSTOMER_ID
+        tests: [not_null, unique]
+
+  - name: int_products
+    description: Current product records from snp_products (dbt_valid_to IS NULL)
+    columns:
+      - name: PRODUCT_ID
+        tests: [not_null, unique]
+
+  - name: int_orders
+    description: Current order state enriched with customer name / region
+    columns:
+      - name: ORDER_ID
+        tests: [not_null, unique]
+
+  - name: int_order_items
+    description: Order line items enriched with product info (incremental append)
+    columns:
+      - name: ORDER_ITEM_ID
+        tests: [not_null, unique]
+
+  - name: int_orders_enriched
+    description: Orders with derived fields (DAYS_TO_SHIP, ORDER_VALUE_TIER, IS_REPEAT_CUSTOMER)
+    columns:
+      - name: ORDER_ID
+        tests: [not_null, unique]
+
+  # ── ERP intermediate ─────────────────────────────────────────────────────
+  - name: int_erp_employees
+    description: Current employee records from snp_erp_employees joined to departments
+    columns:
+      - name: EMP_ID
+        tests: [not_null, unique]
+
+  - name: int_erp_payroll_lines
+    description: Payroll lines enriched with employee + department (incremental append)
+    columns:
+      - name: LINE_ID
+        tests: [not_null, unique]
+
+  # ── CRM intermediate ─────────────────────────────────────────────────────
+  - name: int_crm_accounts
+    description: Current CRM account records from snp_crm_accounts
+    columns:
+      - name: ACCOUNT_ID
+        tests: [not_null, unique]
+
+  - name: int_crm_opportunities
+    description: Current opportunities joined to int_crm_accounts for REGION
+    columns:
+      - name: OPP_ID
+        tests: [not_null, unique]
+
+  # ── Inventory intermediate ───────────────────────────────────────────────
+  - name: int_inv_stock_movements
+    description: Stock movements enriched with warehouse + SKU info (incremental append)
+    columns:
+      - name: MOV_ID
+        tests: [not_null, unique]
+
+# ────────────────────────────────────────────────────────────────────────────
+# GOLD LAYER  (tables / incremental — BI-ready)
+# ────────────────────────────────────────────────────────────────────────────
+
+  # ── Dimensions ───────────────────────────────────────────────────────────
+  - name: dim_customers
+    description: Current customer dimension (full table refresh)
+    columns:
+      - name: CUSTOMER_ID
+        tests: [not_null, unique]
 
   - name: dim_products
+    description: Current product dimension with CATEGORY_NAME denormalised
     columns:
-      - name: product_id
-        tests:
-          - not_null
-          - unique
+      - name: PRODUCT_ID
+        tests: [not_null, unique]
 
+  # ── Orders facts ─────────────────────────────────────────────────────────
   - name: fct_orders
+    description: Order header facts with derived metrics (incremental merge)
     columns:
-      - name: order_id
-        tests:
-          - not_null
-          - unique
-      - name: customer_id
+      - name: ORDER_ID
+        tests: [not_null, unique]
+      - name: CUSTOMER_ID
         tests:
           - relationships:
               to: ref('dim_customers')
-              field: customer_id
+              field: CUSTOMER_ID
 
   - name: fct_order_items
+    description: Order line-item facts (incremental append)
     columns:
-      - name: order_item_id
-        tests:
-          - not_null
-          - unique
-      - name: order_id
+      - name: ORDER_ITEM_ID
+        tests: [not_null, unique]
+      - name: ORDER_ID
         tests:
           - relationships:
               to: ref('fct_orders')
-              field: order_id
-      - name: product_id
+              field: ORDER_ID
+      - name: PRODUCT_ID
         tests:
           - relationships:
               to: ref('dim_products')
-              field: product_id
-      - name: customer_id
-        tests:
-          - relationships:
-              to: ref('dim_customers')
-              field: customer_id
+              field: PRODUCT_ID
+
+  # ── ERP facts ────────────────────────────────────────────────────────────
+  - name: fct_payroll_summary
+    description: Monthly payroll totals by department (incremental merge)
+    columns:
+      - name: RUN_MONTH
+        tests: [not_null]
+      - name: DEPT_CODE
+        tests: [not_null]
+
+  # ── CRM facts ────────────────────────────────────────────────────────────
+  - name: fct_crm_pipeline
+    description: CRM pipeline summary by region + stage (incremental merge)
+    columns:
+      - name: REGION
+        tests: [not_null]
+      - name: STAGE
+        tests: [not_null]
+
+  # ── Inventory facts ──────────────────────────────────────────────────────
+  - name: fct_inventory_position
+    description: Current stock position per warehouse + SKU (incremental merge)
+    columns:
+      - name: WH_CODE
+        tests: [not_null]
+      - name: SKU_CODE
+        tests: [not_null]
+
+  # ── Audit ─────────────────────────────────────────────────────────────────
+  - name: audit_ingestion
+    description: Cross-domain ingestion health — latest _LOADED_AT per source table
+
+# ────────────────────────────────────────────────────────────────────────────
+# SNAPSHOTS  (SCD Type-2, target schema = SILVER)
+# ────────────────────────────────────────────────────────────────────────────
+snapshots:
+  - name: snp_customers
+    description: SCD2 snapshot of customers — tracks FULL_NAME, EMAIL, COUNTRY changes
+
+  - name: snp_products
+    description: SCD2 snapshot of products — tracks LIST_PRICE, PRODUCT_NAME, IS_ACTIVE changes
+
+  - name: snp_orders
+    description: SCD2 snapshot of orders — tracks STATUS, TOTAL_AMOUNT changes
+
+  - name: snp_erp_employees
+    description: SCD2 snapshot of ERP employees — tracks SALARY, DEPT_ID, FULL_NAME changes
+
+  - name: snp_crm_accounts
+    description: SCD2 snapshot of CRM accounts — tracks NAME, REGION changes
+
+  - name: snp_crm_opportunities
+    description: SCD2 snapshot of CRM opportunities — tracks STAGE, AMOUNT_USD, CLOSE_DATE changes
+
+  - name: snp_inv_sku
+    description: SCD2 snapshot of SKU catalogue — tracks DESCR, UNIT_COST changes
