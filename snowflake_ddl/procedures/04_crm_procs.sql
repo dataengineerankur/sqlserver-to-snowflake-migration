@@ -55,13 +55,22 @@ LANGUAGE SQL
 AS
 $$
 DECLARE
-    v_current_stage VARCHAR;
+    v_current VARCHAR;
+    v_exists  NUMBER;
 BEGIN
-    SELECT STAGE INTO v_current_stage
+    SELECT COUNT(*) INTO :v_exists
     FROM BRONZE.CRM_OPPORTUNITIES
     WHERE OPP_ID = :P_OPP_ID;
 
-    IF (v_current_stage = 'Won' AND :P_NEW_STAGE != 'Won') THEN
+    IF (v_exists = 0) THEN
+        RETURN 'ERROR: opportunity not found';
+    END IF;
+
+    SELECT STAGE INTO :v_current
+    FROM BRONZE.CRM_OPPORTUNITIES
+    WHERE OPP_ID = :P_OPP_ID;
+
+    IF (v_current = 'Won' AND :P_NEW_STAGE != 'Won') THEN
         RETURN 'ERROR: cannot move backwards from Won';
     END IF;
 
