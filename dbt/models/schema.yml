@@ -253,6 +253,93 @@ models:
   - name: audit_ingestion
     description: Cross-domain ingestion health — latest _LOADED_AT per source table
 
+  # ── Reports: orders domain ───────────────────────────────────────────────
+  - name: rpt_order_line_detail
+    description: >
+      View replacing SnowConvertStressDB.dbo.vw_OrderLineDetail. Joins order
+      items to orders, customers, products and categories. Read-only — inserts
+      go to BRONZE.ORDER_ITEMS via the pipeline, not through this view.
+    columns:
+      - name: ORDER_ID
+        tests: [not_null]
+      - name: LINE_TOTAL
+        tests: [not_null]
+
+  - name: rpt_open_orders
+    description: >
+      View replacing SnowConvertStressDB.dbo.usp_ListOpenOrders. Returns all
+      orders with STATUS = 'Open', enriched with customer name and days-open
+      counter. Sorting is left to the consuming BI tool.
+    columns:
+      - name: ORDER_ID
+        tests: [not_null]
+      - name: STATUS
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Open']
+
+  - name: rpt_customer_order_totals
+    description: >
+      Table replacing SnowConvertStressDB.dbo.vw_CustomerOrderTotals. One row
+      per customer with order count, total spend, first/last order dates, and
+      a formatted money string. Full rebuild on each dbt run.
+    columns:
+      - name: CUSTOMER_ID
+        tests: [not_null, unique]
+      - name: ORDER_COUNT
+        tests: [not_null]
+      - name: SUM_ORDER_TOTALS
+        tests: [not_null]
+
+  # ── Reports: categories ──────────────────────────────────────────────────
+  - name: rpt_category_closure
+    description: >
+      Table replacing SnowConvertStressDB.dbo.usp_Stress_RecursiveCategoryClosure
+      and its supporting dbo.CategoryClosure table. Uses a recursive CTE with
+      the same synthetic edge rule (ABS(HASH(p,c)) % 3 = 0) and a depth cap
+      of 5. In production use, replace synthetic edges with a real
+      PARENT_CATEGORY_ID column on the categories table.
+    columns:
+      - name: ANCESTOR_ID
+        tests: [not_null]
+      - name: DESCENDANT_ID
+        tests: [not_null]
+      - name: DEPTH
+        tests: [not_null]
+
+  # ── Reports: inventory ───────────────────────────────────────────────────
+  - name: rpt_stock_orders
+    description: >
+      View replacing LabInventory_DB.dbo.vw_StockOrders. Joins stock movements
+      to warehouses and the current SKU snapshot row (dbt_valid_to IS NULL).
+      The INSTEAD OF INSERT trigger on the original SQL Server view is replaced
+      by BRONZE.SP_INV_SOFT_INSERT_STOCK_ORDER — callers must invoke that
+      procedure directly rather than inserting through this view.
+    columns:
+      - name: MOV_ID
+        tests: [not_null]
+      - name: QTY_CHANGE
+        tests: [not_null]
+
+  # ── Calendar dimension ───────────────────────────────────────────────────
+  - name: dim_date
+    description: >
+      Calendar dimension covering 2020-01-01 through 2034-12-31 (5479 rows).
+      Generated entirely from Snowflake's GENERATOR function — no seed CSV
+      needed. Replaces the manual DIM_DATE population that was flagged as
+      incomplete in the original SQL Server database. Includes fiscal year,
+      quarter, month attributes assuming a January fiscal year start.
+    columns:
+      - name: CALENDAR_DATE
+        tests: [not_null, unique]
+      - name: DATE_SK
+        tests: [not_null, unique]
+      - name: IS_WEEKEND
+        tests: [not_null]
+      - name: IS_WEEKDAY
+        tests: [not_null]
+
 # ────────────────────────────────────────────────────────────────────────────
 # SNAPSHOTS  (SCD Type-2, target schema = SILVER)
 # ────────────────────────────────────────────────────────────────────────────
