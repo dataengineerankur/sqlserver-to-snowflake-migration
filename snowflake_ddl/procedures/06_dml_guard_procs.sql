@@ -14,14 +14,19 @@ AS
 $$
 DECLARE
     v_status VARCHAR;
+    v_exists NUMBER;
 BEGIN
-    SELECT STATUS INTO v_status
+    SELECT COUNT(*) INTO :v_exists
     FROM BRONZE.ORDERS
     WHERE ORDER_ID = :P_ORDER_ID;
 
-    IF (v_status IS NULL) THEN
+    IF (v_exists = 0) THEN
         RETURN 'ERROR: order not found';
     END IF;
+
+    SELECT STATUS INTO :v_status
+    FROM BRONZE.ORDERS
+    WHERE ORDER_ID = :P_ORDER_ID;
 
     IF (v_status = 'Closed') THEN
         RETURN 'ERROR: cannot delete closed orders (archive pattern)';
@@ -36,7 +41,7 @@ BEGIN
 
     DELETE FROM BRONZE.ORDERS WHERE ORDER_ID = :P_ORDER_ID;
 
-    RETURN 'Archived and deleted order_id=' || P_ORDER_ID;
+    RETURN 'Archived and deleted order_id=' || :P_ORDER_ID;
 END;
 $$;
 

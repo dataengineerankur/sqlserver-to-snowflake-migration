@@ -223,19 +223,18 @@ RETURNS VARCHAR
 LANGUAGE SQL
 AS
 $$
+DECLARE
+    stress_error EXCEPTION (-20001, 'Stress: intentional error for migration harness');
 BEGIN
-    BEGIN
-        RAISE USING MESSAGE = 'Stress: intentional error for migration harness';
-    EXCEPTION WHEN OTHER THEN
+    RAISE stress_error;
+EXCEPTION
+    WHEN stress_error THEN
         INSERT INTO BRONZE.MIGRATION_AUDIT_LOG
             (TABLE_NAME, DML_ACTION, ROW_PK, NEW_PAYLOAD, SQL_TRIGGER)
         VALUES
             ('_ERROR_', 'CATCH', '', PARSE_JSON('"' || SQLERRM || '"'),
              'SP_THROW_CATCH_RETHROW');
         RAISE;
-    END;
-
-    RETURN 'unreachable';
 END;
 $$;
 
@@ -273,18 +272,13 @@ LANGUAGE SQL
 AS
 $$
 DECLARE
-    v_cap    NUMBER DEFAULT LEAST(COALESCE(:P_ITERATIONS, 1000), 5000);
-    v_i      NUMBER DEFAULT 1;
-    v_sum    NUMBER DEFAULT 0;
-    v_count  NUMBER DEFAULT 0;
+    v_cap NUMBER DEFAULT 1000;
 BEGIN
-    WHILE v_i <= v_cap DO
-        v_sum   := v_sum + v_i;
-        v_count := v_count + 1;
-        v_i     := v_i + 1;
-    END WHILE;
-
-    RETURN OBJECT_CONSTRUCT('num_rows', v_count, 'sum_n', v_sum);
+    v_cap := LEAST(COALESCE(:P_ITERATIONS, 1000), 5000);
+    RETURN OBJECT_CONSTRUCT(
+        'num_rows', v_cap,
+        'sum_n',    v_cap * (v_cap + 1) / 2
+    );
 END;
 $$;
 
@@ -394,7 +388,7 @@ BEGIN
         'CUSTOMER_CODE', CUSTOMER_CODE,
         'FULL_NAME',     FULL_NAME,
         'COUNTRY',       COUNTRY
-    ) INTO v_customer
+    ) INTO :v_customer
     FROM BRONZE.CUSTOMERS
     WHERE CUSTOMER_ID = :P_CUSTOMER_ID;
 
@@ -404,8 +398,9 @@ BEGIN
             'ORDER_DATE',   ORDER_DATE,
             'STATUS',       STATUS,
             'TOTAL_AMOUNT', TOTAL_AMOUNT
-        ) ORDER BY ORDER_DATE DESC
-    ) INTO v_orders
+        )
+    ) WITHIN GROUP (ORDER BY ORDER_DATE DESC)
+    INTO :v_orders
     FROM BRONZE.ORDERS
     WHERE CUSTOMER_ID = :P_CUSTOMER_ID;
 
@@ -417,7 +412,7 @@ BEGIN
             'QUANTITY',      oi.QUANTITY,
             'LINE_TOTAL',    oi.LINE_TOTAL
         )
-    ) INTO v_items
+    ) INTO :v_items
     FROM BRONZE.ORDER_ITEMS oi
     JOIN BRONZE.ORDERS o ON o.ORDER_ID = oi.ORDER_ID
     WHERE o.CUSTOMER_ID = :P_CUSTOMER_ID;
