@@ -27,11 +27,11 @@ x-airflow-common: &airflow-common
     AWS_DEFAULT_REGION: us-east-1
     # Airflow connections (overrides UI; edit as needed)
     AIRFLOW_CONN_AWS_DEFAULT: "aws:///?region_name=us-east-1&profile=test-migration"
-    # Snowflake connection — edit or override per environment
-    AIRFLOW_CONN_SNOWFLAKE_DEFAULT: "snowflake://PATCHIT:Tata8237552399@WBZTWSY-KH99814/MSSQL_MIGRATION_LAB/BRONZE?warehouse=WH_MSSQL_MIGRATION&role=ACCOUNTADMIN"
-    # Variables used by the DAGs
-    AIRFLOW_VAR_DMS_BUCKET: "patchit-mssql-migration-dat-dmsmssqlbucket87a82397-vtzwafs65lwt"
-    AIRFLOW_VAR_GLUE_BUCKET: "patchit-mssql-migration-da-gluemssqlbucket71eeb701-ninq3nmqyfux"
+    # Snowflake connection — set via .env file (copy .env.example → .env and fill in)
+    AIRFLOW_CONN_SNOWFLAKE_DEFAULT: "snowflake://${SNOWFLAKE_USER}:${SNOWFLAKE_PASSWORD}@${SNOWFLAKE_ACCOUNT}/${SNOWFLAKE_DATABASE}/BRONZE?warehouse=${SNOWFLAKE_WAREHOUSE}&role=${SNOWFLAKE_ROLE}"
+    # Variables used by the DAGs — set via .env file
+    AIRFLOW_VAR_DMS_BUCKET: "${DMS_BUCKET}"
+    AIRFLOW_VAR_GLUE_BUCKET: "${GLUE_BUCKET}"
   volumes:
     - ./dags:/opt/airflow/dags          # DAG files + dag_config.py
     - ./plugins:/opt/airflow/plugins    # snowflake_client.py and other helpers

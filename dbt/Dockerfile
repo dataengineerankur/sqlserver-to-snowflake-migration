@@ -31,5 +31,7 @@ COPY macros/              ./macros/
 # Install any packages declared in packages.yml (none for now, but good practice)
 RUN test -f packages.yml && dbt deps --profiles-dir /opt/dbt || echo "No packages.yml — skipping dbt deps"
 
-ENTRYPOINT ["dbt", "--profiles-dir", "/opt/dbt"]
+# --profiles-dir is NOT a valid global option in dbt 1.x; use DBT_PROFILES_DIR env var instead.
+ENV DBT_PROFILES_DIR=/opt/dbt
+ENTRYPOINT ["dbt"]
 CMD ["run"]

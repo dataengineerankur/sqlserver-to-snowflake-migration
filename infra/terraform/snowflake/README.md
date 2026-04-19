@@ -21,8 +21,8 @@ Deploys warehouse, database/schemas, storage integration, stages, VARIANT landin
 ## Local apply
 
 ```bash
-export TF_VAR_snowflake_account="WBZTWSY-KH99814"
-export TF_VAR_snowflake_user="PATCHIT"
+export TF_VAR_snowflake_account="your_org-your_account"
+export TF_VAR_snowflake_user="your_snowflake_user"
 export TF_VAR_snowflake_role="ACCOUNTADMIN"
 export TF_VAR_snowflake_password="***"
 export TF_VAR_aws_dms_bucket="your-dms-bucket"

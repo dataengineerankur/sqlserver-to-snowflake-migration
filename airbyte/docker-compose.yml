@@ -1,0 +1,157 @@
+# Airbyte OSS — local development stack
+# Based on Airbyte 0.50.x docker-compose (last stable release with full docker-compose support)
+#
+# Start:  docker compose up -d
+# UI:     http://localhost:8000  (user: airbyte / pass: password)
+# Stop:   docker compose down
+#
+# After startup, run:  python setup_connections.py
+# to auto-configure the SQL Server → Snowflake connection.
+
+version: "3.8"
+
+x-logging: &default-logging
+  options:
+    max-size: "100m"
+    max-file: "5"
+  driver: json-file
+
+services:
+  # ── Metadata database ────────────────────────────────────────────────────────
+  airbyte-db:
+    image: airbyte/db:0.50.55
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=docker
+      - POSTGRES_PASSWORD=docker
+    volumes:
+      - airbyte-db:/var/lib/postgresql/data
+    networks:
+      - airbyte_internal
+
+  # ── Temporal workflow engine ─────────────────────────────────────────────────
+  airbyte-temporal:
+    image: airbyte/temporal:0.50.55
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=docker
+      - POSTGRES_PWD=docker
+      - POSTGRES_SEEDS=airbyte-db
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development.yaml
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      - airbyte-db
+    networks:
+      - airbyte_internal
+
+  # ── Airbyte bootloader (runs migrations then exits) ──────────────────────────
+  airbyte-bootloader:
+    image: airbyte/bootloader:0.50.55
+    logging: *default-logging
+    environment:
+      - AIRBYTE_VERSION=0.50.55
+      - DATABASE_PASSWORD=docker
+      - DATABASE_URL=jdbc:postgresql://airbyte-db:5432/airbyte
+      - DATABASE_USER=docker
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - RUN_DATABASE_MIGRATION_ON_STARTUP=true
+    depends_on:
+      - airbyte-db
+    networks:
+      - airbyte_internal
+
+  # ── API server ───────────────────────────────────────────────────────────────
+  airbyte-server:
+    image: airbyte/server:0.50.55
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      - AIRBYTE_ROLE=${AIRBYTE_ROLE:-dev}
+      - AIRBYTE_VERSION=0.50.55
+      - AUTO_DETECT_SCHEMA=true
+      - DATABASE_PASSWORD=docker
+      - DATABASE_URL=jdbc:postgresql://airbyte-db:5432/airbyte
+      - DATABASE_USER=docker
+      - JOB_MAIN_CONTAINER_CPU_LIMIT=
+      - JOB_MAIN_CONTAINER_CPU_REQUEST=
+      - JOB_MAIN_CONTAINER_MEMORY_LIMIT=
+      - JOB_MAIN_CONTAINER_MEMORY_REQUEST=
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TEMPORAL_HOST=airbyte-temporal:7233
+      - TRACKING_STRATEGY=logging
+      - WEBAPP_URL=http://localhost:8000
+      - WORKER_ENVIRONMENT=docker
+      - WORKSPACE_ROOT=/tmp/workspace
+      - WORKSPACE_DOCKER_MOUNT=airbyte-workspace
+      - DOCKER_NETWORK=airbyte_internal
+    ports:
+      - "8001:8001"   # internal API
+    depends_on:
+      - airbyte-bootloader
+      - airbyte-temporal
+    volumes:
+      - airbyte-workspace:/tmp/workspace
+      - airbyte-local-root:/local
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - airbyte_internal
+
+  # ── Scheduler / Orchestrator ─────────────────────────────────────────────────
+  airbyte-worker:
+    image: airbyte/worker:0.50.55
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      - AIRBYTE_VERSION=0.50.55
+      - AUTO_DETECT_SCHEMA=true
+      - DATABASE_PASSWORD=docker
+      - DATABASE_URL=jdbc:postgresql://airbyte-db:5432/airbyte
+      - DATABASE_USER=docker
+      - DOCKER_NETWORK=airbyte_internal
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TEMPORAL_HOST=airbyte-temporal:7233
+      - TRACKING_STRATEGY=logging
+      - WORKER_ENVIRONMENT=docker
+      - WORKSPACE_DOCKER_MOUNT=airbyte-workspace
+      - WORKSPACE_ROOT=/tmp/workspace
+    depends_on:
+      - airbyte-server
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - airbyte-workspace:/tmp/workspace
+      - airbyte-local-root:/local
+    networks:
+      - airbyte_internal
+
+  # ── Web UI (nginx proxy) ─────────────────────────────────────────────────────
+  airbyte-webapp:
+    image: airbyte/webapp:0.50.55
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      - AIRBYTE_SERVER_HOST=airbyte-server
+      - AIRBYTE_SERVER_PORT=8001
+      - AIRBYTE_SERVER_PROTO=http
+      - AIRBYTE_VERSION=0.50.55
+      - INTERNAL_API_HOST=airbyte-server:8001
+      - TRACKING_STRATEGY=logging
+    ports:
+      - "8000:80"    # UI at http://localhost:8000
+    depends_on:
+      - airbyte-server
+    networks:
+      - airbyte_internal
+      - airbyte_public
+
+volumes:
+  airbyte-db:
+  airbyte-workspace:
+  airbyte-local-root:
+
+networks:
+  airbyte_internal:
+  airbyte_public:

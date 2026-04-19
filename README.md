@@ -1,192 +1,360 @@
-# SQL Server → AWS → Snowflake Migration
+# SQL Server to Snowflake Migration Lab
 
-End-to-end migration lab: SQL Server on Docker → AWS DMS full-load → S3 → Snowpipe → Snowflake medallion (Raw → Bronze → Silver → Gold) with Airflow orchestration and dbt transformations.
+A complete, runnable migration from SQL Server to Snowflake — covering four source databases (e-commerce, ERP, CRM, inventory), two ingestion paths (AWS DMS and Airbyte), a four-stage Snowflake medallion architecture, Airflow orchestration, dbt transformations, and a live migration dashboard.
 
-## Repository Layout
+This is a training lab, not a production template. The goal is to show you every layer of a real migration so you can understand the decisions, not just copy the configs.
+
+---
+
+## What you're building
+
+```
+SQL Server (Docker or RDS)
+        │
+        ├── via AWS DMS ────────► S3 (Parquet) ──► Snowpipe ──► RAW_MSSQL.RAW_DMS_VARIANT
+        │                                                                │
+        └── via Airbyte ─────────────────────────────────────► MSSQL_MIGRATION_LAB.AIRBYTE_RAW
+                                                                         │
+                                                          BRONZE (typed, MERGE dedup)
+                                                                         │
+                                                          SILVER (SCD Type-2 via dbt snapshot)
+                                                                         │
+                                                          GOLD (facts + dims via dbt run)
+                                                                         │
+                                                          dbt test (bronze + silver + gold)
+```
+
+DMS takes the AWS-native route: it writes Parquet files to S3, Snowpipe picks them up automatically, and Airflow runs a MERGE to promote typed rows into Bronze. Airbyte skips S3 entirely and writes directly to Snowflake using a connector — less infrastructure but no Parquet archive. You can run both side by side and compare counts.
+
+---
+
+## Repository layout
 
 ```
 sqlserver-to-snowflake-migration/
-├── sqlserver/          # Local SQL Server setup (Docker + DDL + seed data)
+├── sqlserver/              Local SQL Server (Docker + DDL + seed data)
 │   ├── docker-compose.yml
-│   ├── sql/            # 01_create_database → 22_lab_inventory DDL scripts
-│   └── scripts/        # run_lab.sh, run_validation.sh, inspect_counts.sql
+│   ├── sql/                01_create_database → 22_lab_inventory (all 4 source DBs)
+│   └── scripts/            run_lab.sh, run_validation.sh, inspect_counts.sql
 │
 ├── infra/
-│   ├── aws-cdk/        # CDK stacks: DataLanding (S3+SNS), DmsCdc, TerraformState
+│   ├── aws-cdk/            CDK stacks: DataLanding (S3+SNS), DmsCdc, TerraformState
 │   └── terraform/
-│       ├── snowflake/  # Warehouse, DB, schemas, stages, Snowpipes, DDL tables,
-│       │               # procedures, UDFs, streams, tasks
-│       └── aws/        # DMS replication instance, endpoint, task
+│       ├── snowflake/      Warehouse, DB, schemas, Snowpipes, DDL tables, SPs, UDFs, streams, tasks
+│       └── aws/            DMS replication instance, endpoint, task
 │
-├── dms/                # DMS task settings JSON + table mappings + helper scripts
-├── glue/jobs/          # PySpark Glue jobs (raw ingest, silver/gold transform)
+├── dms/                    DMS task settings JSON + table mappings
+├── airbyte/                Airbyte OSS docker-compose + setup + comparison script
 │
 ├── airflow/
 │   ├── docker-compose.yml
-│   └── dags/           # 4 focused DAGs (bronze → silver → gold → quality)
+│   └── dags/               4 DAGs (bronze → silver → gold → quality)
 │
 ├── dbt/
 │   ├── dbt_project.yml
 │   ├── profiles.yml.example
-│   ├── macros/
-│   └── models/         # customers / orders / products  (stg → int → gold)
+│   └── models/             customers / orders / products  (stg → int → gold)
 │
 ├── snowflake_ddl/
-│   ├── bronze/         # Typed tables matching SQL Server schema (4 source DBs)
-│   │                   # + 05_stress_supporting.sql (audit/queue/archive tables)
-│   ├── silver/         # SCD Type-2 surrogate-key tables
-│   ├── gold/           # Facts + dimensions + MIGRATION_METADATA audit table
-│   ├── iceberg/        # Iceberg external tables for long-term audit retention
-│   ├── procedures/     # Snowflake Scripting SPs replacing SQL Server procs
-│   │   ├── 01_basic_procs.sql        # usp_RefreshOrderTotals, usp_ListOpenOrders
-│   │   ├── 02_stress_procs.sql       # All usp_Stress_* (16 procs)
-│   │   ├── 03_erp_procs.sql          # ERP dynamic report + payroll close
-│   │   ├── 04_crm_procs.sql          # CRM merge + pipeline list + stage guard
-│   │   ├── 05_inventory_procs.sql    # Inventory dynamic filter + stock insert + SKU cost
-│   │   └── 06_dml_guard_procs.sql    # INSTEAD OF trigger replacements
-│   ├── streams_tasks/  # Snowflake Streams + Tasks replacing DML triggers
-│   │   ├── 01_stressdb_streams.sql   # Orders audit, OrderItems recalc, Products price audit
-│   │   ├── 02_erp_streams.sql        # Employees audit, Payroll recalc
-│   │   ├── 03_crm_streams.sql        # Accounts activity, Opportunities audit
-│   │   └── 04_inventory_streams.sql  # SKU cost guard, Stock movements audit
-│   └── udfs/
-│       ├── 01_scalar_udfs.sql        # FN_FORMAT_MONEY, FN_ORDER_LINE_COUNT
-│       └── 02_xml_snowpark.py        # SP_XML_ORDER_DOCUMENT, SP_INV_STOCK_XML (Snowpark)
+│   ├── bronze/             Typed tables for all 4 source DBs
+│   ├── silver/             SCD Type-2 surrogate-key tables
+│   ├── gold/               Facts + dims + MIGRATION_METADATA audit
+│   ├── iceberg/            Iceberg external tables for long-term audit
+│   ├── procedures/         Snowflake SPs replacing SQL Server stored procs
+│   ├── streams_tasks/      Snowflake Streams + Tasks replacing DML triggers
+│   └── udfs/               Scalar UDFs + Snowpark Python for XML/TVP
 │
-└── docs/
-    └── sct_assessment.md   # Type-mapping decisions (SCT output)
+└── .env.example            All required credentials (copy → .env, never commit .env)
 ```
 
-## Quick Start — Local SQL Server
+---
+
+## Prerequisites
+
+You need these accounts and tools before running anything:
+
+- Docker Desktop (for local SQL Server and Airflow)
+- AWS account with permissions to create S3, DMS, IAM, VPC resources
+- Snowflake account (trial works — you'll create everything via Terraform)
+- Python 3.10+ with pip
+- AWS CDK v2: `npm install -g aws-cdk`
+- Terraform 1.5+
+- dbt Core 1.7+: `pip install dbt-snowflake`
+
+Copy `.env.example` to `.env` at the repo root and fill in your values. Every script in this repo reads from that file. Nothing is hardcoded.
+
+---
+
+## Step 1 — Stand up SQL Server locally
+
+The lab uses four SQL Server databases to simulate a realistic mixed-workload migration: a stress/e-commerce DB (orders, customers, products), an ERP DB (employees, payroll, departments), a CRM DB (accounts, contacts, opportunities), and an inventory DB (warehouses, SKUs, stock movements).
 
 ```bash
 cd sqlserver
-cp .env.example .env          # set SA_PASSWORD
+cp .env.example .env          # set SA_PASSWORD to something complex (SQL Server requires it)
 docker compose up -d
-cd scripts && ./run_lab.sh    # creates all 4 lab DBs + seeds data
-./run_validation.sh           # confirms row counts
 ```
 
-## Quick Start — Airflow
+Wait about 30 seconds for SQL Server to initialize, then seed all four databases:
+
+```bash
+cd scripts
+./run_lab.sh
+```
+
+This runs all DDL scripts in order (`01_create_database.sql` through `22_lab_inventory.sql`), creates stored procedures, triggers, views, and inserts seed rows. After it finishes:
+
+```bash
+./run_validation.sh           # prints row counts per table
+```
+
+You should see roughly 100-500 rows per table depending on the seed script. If any count is 0, check `docker logs sqlserver_mssql_1` — the most common issue is the SA password not meeting SQL Server's complexity rules.
+
+**CDC note**: Some scripts enable Change Data Capture on the stress DB. This requires SQL Server Agent to be running. The Docker image in this lab includes Agent. If you're using your own SQL Server image and Agent isn't running, CDC setup will fail silently — check with `SELECT * FROM sys.dm_cdc_log_scan_sessions`.
+
+---
+
+## Step 2 — Deploy AWS infrastructure
+
+DMS needs to reach SQL Server. It cannot connect to `localhost` on your machine — it runs inside AWS VPC and needs a resolvable endpoint. You have two options:
+
+**Option A (recommended for this lab)**: Use SQL Server on RDS. Deploy a small `db.t3.medium` RDS MSSQL instance, restore the seed data there, and point DMS at the RDS endpoint. RDS lives in the same VPC as your DMS replication instance so latency is low and you avoid VPN/firewall issues entirely.
+
+**Option B**: Run SQL Server on an EC2 instance and expose it via private IP within the VPC. More complex, not covered here.
+
+### Deploy with CDK
+
+```bash
+cd infra/aws-cdk
+pip install -r requirements.txt
+cp ../../.env .env
+
+cdk bootstrap aws://<your-account-id>/<region>   # once per account/region
+cdk deploy DataLandingStack     # creates S3 DMS bucket + SNS notification
+cdk deploy TerraformStateStack  # creates S3 bucket for Terraform state
+```
+
+The `DataLandingStack` output includes the S3 bucket name. Add it to your `.env` as `DMS_BUCKET`.
+
+### Deploy RDS SQL Server (if using Option A)
+
+```bash
+cd infra/terraform/aws
+terraform init -backend-config="bucket=${TF_STATE_BUCKET}" \
+               -backend-config="key=mssql-migration/aws/terraform.tfstate" \
+               -backend-config="region=${AWS_REGION}"
+terraform apply
+```
+
+This creates a DMS replication instance, source endpoint (pointing at RDS), target endpoint (S3), and a full-load task for all 15 tables across the four databases. After `apply`:
+
+```bash
+terraform output dms_task_arn   # save this, you'll start the task next
+```
+
+After RDS is up, load the same seed data you ran locally. The simplest way is to run `run_lab.sh` against the RDS endpoint:
+
+```bash
+# install sqlcmd or use the MSSQL Docker container as a client
+MSSQL_HOST=<rds-endpoint> MSSQL_USER=admin MSSQL_PASSWORD=<your-rds-pass> ./run_lab.sh
+```
+
+---
+
+## Step 3 — Set up Snowflake
+
+```bash
+cd infra/terraform/snowflake
+terraform init -backend-config="bucket=${TF_STATE_BUCKET}" \
+               -backend-config="key=mssql-migration/snowflake/terraform.tfstate" \
+               -backend-config="region=${AWS_REGION}"
+terraform apply
+```
+
+Set these environment variables before running (Terraform picks them up automatically):
+
+```bash
+export SNOWFLAKE_ORGANIZATION_NAME=<your-org>
+export SNOWFLAKE_ACCOUNT_NAME=<your-account>
+export SNOWFLAKE_USER=<your-user>
+export SNOWFLAKE_PASSWORD=<your-password>
+```
+
+Terraform creates:
+
+- Database `MSSQL_MIGRATION_LAB` with schemas `RAW_MSSQL`, `BRONZE`, `SILVER`, `GOLD`, `AIRBYTE_RAW`
+- Warehouse `WH_MSSQL_MIGRATION` (X-SMALL, auto-suspend 60s)
+- External stage pointing at your S3 DMS bucket with a storage integration
+- Snowpipe `PIPE_RAW_DMS_VARIANT` — auto-ingests Parquet files from S3 into `RAW_MSSQL.RAW_DMS_VARIANT`
+- All Bronze, Silver, and Gold DDL tables
+- All stored procedures, UDFs, streams, and tasks from `snowflake_ddl/`
+
+After apply, the Snowpipe is live. When DMS writes a Parquet file to S3, the SNS notification triggers Snowpipe and the row lands in `RAW_DMS_VARIANT` within seconds.
+
+---
+
+## Step 4 — Run DMS full-load
+
+Start the DMS task from the console or CLI:
+
+```bash
+aws dms start-replication-task \
+    --replication-task-arn $(terraform -chdir=infra/terraform/aws output -raw dms_task_arn) \
+    --start-replication-task-type start-replication
+```
+
+Monitor progress in the AWS console under Database Migration Service → Replication tasks. A full load of ~5,000 seed rows typically completes in under 5 minutes.
+
+When it finishes, check Snowflake:
+
+```sql
+SELECT COUNT(*) FROM MSSQL_MIGRATION_LAB.RAW_MSSQL.RAW_DMS_VARIANT;
+```
+
+You should see rows. If the count is 0, check:
+1. S3 bucket — do Parquet files exist under the DMS prefix?
+2. Snowpipe history: `SELECT * FROM TABLE(INFORMATION_SCHEMA.COPY_HISTORY(TABLE_NAME=>'RAW_DMS_VARIANT', START_TIME=>DATEADD('hour',-1,CURRENT_TIMESTAMP())))`
+3. Storage integration IAM trust policy — the most common setup mistake is the Snowflake AWS account not having permission to read your S3 bucket
+
+---
+
+## Step 5 — Airbyte alternative (optional)
+
+Airbyte is a good comparison to DMS. It connects directly from Docker to SQL Server, runs discovery, and writes to `MSSQL_MIGRATION_LAB.AIRBYTE_RAW` without any S3 involvement. The tradeoff: you lose the Parquet archive on S3, but you gain a much simpler setup and no AWS cost.
+
+```bash
+cd airbyte
+docker compose up -d
+```
+
+Wait for Airbyte to initialize (about 2 minutes). Then run the setup script:
+
+```bash
+pip install requests python-dotenv
+python setup_connections.py
+```
+
+This creates a SQL Server source connector, a Snowflake destination connector, creates a connection between them, and triggers the first full sync. The script polls until the sync completes and prints a summary.
+
+**Important**: The Airbyte Docker containers reach SQL Server at `host.docker.internal`, not `localhost`. This is already set in the config. If you're on Linux, `host.docker.internal` requires `--add-host=host.docker.internal:host-gateway` in your Docker run command — the `docker-compose.yml` handles this automatically.
+
+After the sync, compare row counts between DMS Bronze and Airbyte RAW:
+
+```bash
+python compare_dms_vs_airbyte.py
+```
+
+Airbyte row counts should be greater than or equal to Bronze counts. Bronze uses MERGE (dedup by primary key, latest wins). Airbyte in append-dedup mode keeps one row per PK per sync cycle, so it can accumulate more rows if you ran multiple syncs.
+
+Airbyte UI: http://localhost:8000 (user: `airbyte`, password: `password`)
+
+---
+
+## Step 6 — Run the Airflow pipeline
+
+Airflow orchestrates four DAGs that move data from RAW through Bronze, Silver, and Gold, then run quality checks.
 
 ```bash
 cd airflow
-# copy .env.example from sqlserver/ and add Snowflake creds
 docker compose up -d
-# open http://localhost:8080  (admin / admin)
 ```
 
-## Quick Start — dbt
+Open http://localhost:8080. Log in with `admin` / `admin`. You'll see four DAGs:
+
+### DAG 1: mssql_01_ingest_bronze
+
+Reads from `RAW_DMS_VARIANT` and runs a MERGE into each of the 15 Bronze tables. The MERGE deduplicates by primary key using `QUALIFY ROW_NUMBER() OVER (PARTITION BY <pk>) = 1` — this is necessary because `SELECT DISTINCT` doesn't deduplicate when computed columns like `CURRENT_TIMESTAMP()` produce different values for identical rows.
+
+Before MERGE, this DAG also resumes the Snowflake Streams + Tasks (CDC equivalents for triggers). After MERGE, it suspends them. This prevents tasks from running on partial data.
+
+Tasks: `check_raw_counts` → `resume_sf_tasks` → `merge_bronze_stress` + `merge_bronze_erp` + `merge_bronze_crm` + `merge_bronze_inv` (parallel) → `suspend_sf_tasks` → `report_bronze_counts`
+
+### DAG 2: mssql_02_silver_snapshots
+
+Waits for DAG 1 to complete, then runs `dbt snapshot` for all 15 tables. Each snapshot builds an SCD Type-2 history in Silver — adding `dbt_scd_id`, `dbt_valid_from`, `dbt_valid_to`, and `dbt_updated_at` columns. The current record for any row is where `dbt_valid_to IS NULL`.
+
+### DAG 3: mssql_03_gold_transforms
+
+Waits for DAG 2, then runs `dbt run` for the staging, intermediate, and gold models. Gold produces three fact/dimension tables: `CUSTOMERS_DIM`, `ORDERS_FACT`, `PRODUCTS_DIM`. These are what you'd expose to BI tools.
+
+### DAG 4: mssql_04_data_quality
+
+Waits for DAG 3, then runs `dbt test` across all three layers. Expected result: 27 PASS, 3 WARN. The warnings are for nullable columns where data quality is expected to improve once CDC is fully running.
+
+### Running the pipeline
+
+Trigger DAG 1 first. After it completes successfully, trigger DAGs 2, 3, and 4 — they will wait on the sensor and then proceed automatically. If you're running them manually, trigger each one with the same `--exec-date` as DAG 1:
 
 ```bash
-cd dbt
-cp profiles.yml.example ~/.dbt/profiles.yml   # fill in your Snowflake creds
-dbt deps
-dbt run --target dev
-dbt test
+# get DAG 1's execution date from the Airflow UI, then:
+airflow dags trigger mssql_02_silver_snapshots --exec-date "2026-04-19T15:27:15+00:00"
+airflow dags trigger mssql_03_gold_transforms  --exec-date "2026-04-19T15:27:15+00:00"
+airflow dags trigger mssql_04_data_quality     --exec-date "2026-04-19T15:27:15+00:00"
 ```
 
-## CI/CD
+The ExternalTaskSensor matches by exact `execution_date`, not by "most recent successful run." If the downstream DAGs are triggered at a different time, the sensor will poll forever. The `--exec-date` flag is how you tell Airflow these runs belong to the same logical batch.
 
-GitHub Actions workflow at `.github/workflows/migration-cicd.yml`:
+---
 
-| Trigger | Jobs |
-|---------|------|
-| Pull Request → main | `validate-pr`: CDK synth + terraform validate + dbt parse |
-| Push to main | `deploy-main`: CDK deploy + terraform apply (Snowflake + AWS DMS) |
+## Step 7 — Live migration dashboard
 
-### Required GitHub Secrets
-
-| Secret | Description |
-|--------|-------------|
-| `AWS_ROLE_ARN` | OIDC IAM role ARN (`arn:aws:iam::<account>:role/github-actions-mssql-migration`) |
-| `AWS_REGION` | `us-east-1` |
-| `MSSQL_PROJECT_NAME` | CDK project prefix (e.g. `patchit-mssql-migration`) |
-| `TF_STATE_BUCKET` | S3 bucket for Terraform remote state |
-| `SNOWFLAKE_ACCOUNT` | Snowflake account identifier |
-| `SNOWFLAKE_USER` | Snowflake service user |
-| `DMS_BUCKET_NAME` | DMS landing S3 bucket name (CDK output) |
-| `GLUE_BUCKET_NAME` | Glue landing S3 bucket name (CDK output) |
-| `SNOWFLAKE_S3_ROLE_ARN` | IAM role ARN for Snowflake storage integration |
-
-## Architecture
-
-```
-SQL Server (Docker / RDS)
-        │  full-load
-        ▼
-    AWS DMS ──── Parquet ───▶ S3 DMS bucket
-                                    │ Snowpipe
-                                    ▼
-                           RAW_MSSQL.RAW_DMS_VARIANT (VARIANT)
-                                    │ Airflow DAG 1 (mssql_01_ingest_bronze)
-                                    ▼
-                           BRONZE (typed, metadata cols)
-                                    │ Airflow DAG 2 (mssql_02_silver_snapshots)
-                                    ▼
-                           SILVER (SCD Type-2 via dbt snapshot)
-                                    │ Airflow DAG 3 (mssql_03_gold_transforms)
-                                    ▼
-                           GOLD (facts + dims + reports via dbt run)
-                                    │ Airflow DAG 4 (mssql_04_data_quality)
-                                    ▼
-                           dbt test (bronze + silver + gold)
+```bash
+cd airflow/dashboard
+docker compose up -d
 ```
 
-## SQL Server Object Migration Map
+Open http://localhost:8050. The dashboard shows:
 
-SQL Server has triggers, procedures, and constraints that have no direct equivalent
-in Snowflake. The table below shows what each object became and where the code lives.
+- DAG status cards (running / success / failed) polled from the Airflow REST API
+- Row counts per table across RAW, Bronze, Silver, and Gold
+- Coverage percentages (how many of the 15 tables have at least 1 row in each layer)
+- A CDC events table showing the last 50 rows landed in RAW (useful for watching live DMS streaming)
 
-### Constraints
+The dashboard refreshes every 30 seconds in a background thread. You can force a refresh by clicking the "Refresh Now" button or POSTing to `http://localhost:8050/api/refresh`.
+
+---
+
+## SQL Server object migration map
+
+SQL Server has objects that don't exist in Snowflake. Here's what each became.
+
+### Stored procedures
 
 | SQL Server | Snowflake | Notes |
 |---|---|---|
-| `OrderItems.Quantity CHECK (Quantity > 0)` | `NOT ENFORCED` constraint on `BRONZE.ORDER_ITEMS` | Enforced by `SP_TVP_APPEND_ORDER_LINES` validation |
-| `Orders.Status DEFAULT 'Open'` | Column `DEFAULT 'Open'` | Supported natively |
-| `Customers.Country DEFAULT 'US'` | Column `DEFAULT 'US'` | Supported natively |
-| `OrderItems.LineTotal AS (Qty * UnitPrice) PERSISTED` | Computed at ingest time, stored as `LINE_TOTAL NUMBER(18,4)` | No computed columns in Snowflake; value set during MERGE |
-| `Products.SKU UNIQUE` | `UNIQUE NOT ENFORCED` | Enforced by ingest MERGE logic |
-| `Orders → Customers FK` | `FOREIGN KEY NOT ENFORCED` | Declared in DDL, not enforced at write time |
-| `OrderItems → Orders FK` | `FOREIGN KEY NOT ENFORCED` | Same pattern |
-
-### Stored Procedures
-
-| SQL Server | Snowflake SP | Location | Notes |
-|---|---|---|---|
-| `usp_RefreshOrderTotals(@OrderId)` | `SP_REFRESH_ORDER_TOTALS(order_id)` | `01_basic_procs.sql` | Direct port |
-| `usp_ListOpenOrders` | `SP_LIST_OPEN_ORDERS()` | `01_basic_procs.sql` | Returns RESULTSET |
-| `usp_Stress_DynamicSearchOrders` | `SP_DYNAMIC_SEARCH_ORDERS(...)` | `02_stress_procs.sql` | `sp_executesql` → `EXECUTE IMMEDIATE` |
-| `usp_Stress_CursorRepriceProductsByCategory` | `SP_REPRICE_PRODUCTS_BY_CATEGORY(...)` | `02_stress_procs.sql` | Cursor removed; set-based UPDATE |
-| `usp_Stress_MergeUpsertCustomers(@json)` | `SP_MERGE_UPSERT_CUSTOMERS(variant)` | `02_stress_procs.sql` | `OPENJSON` → `FLATTEN` |
-| `usp_Stress_XmlOrderDocument(@OrderId)` | `SP_XML_ORDER_DOCUMENT(order_id)` | `udfs/02_xml_snowpark.py` | Snowpark Python; no native XML type |
-| `usp_Stress_JsonOrderLines(@OrderId)` | `SP_JSON_ORDER_LINES(order_id)` | `02_stress_procs.sql` | `FOR JSON PATH` → `ARRAY_AGG + OBJECT_CONSTRUCT` |
-| `usp_Stress_ChainedA/B/C` | `SP_CHAINED_A/B/C` | `02_stress_procs.sql` | Nested `CALL` statements |
-| `usp_Stress_RecursiveCategoryClosure` | `SP_BUILD_CATEGORY_CLOSURE()` | `02_stress_procs.sql` | `WITH RECURSIVE` CTE supported in Snowflake |
-| `usp_Stress_SavePointPartialRollback` | No equivalent | N/A | Snowflake has no `SAVE TRANSACTION`; not ported |
-| `usp_Stress_ThrowCatchAndRethrow` | `SP_THROW_CATCH_RETHROW()` | `02_stress_procs.sql` | `BEGIN TRY/CATCH` → `EXCEPTION WHEN OTHER THEN` |
-| `usp_Stress_OutputMergePriceHistory` | `SP_UPDATE_PRICE_WITH_HISTORY(...)` | `02_stress_procs.sql` | `OUTPUT` clause → read old value before update |
-| `usp_Stress_WhileBatchNumbers(@n)` | `SP_WHILE_BATCH_NUMBERS(n)` | `02_stress_procs.sql` | Temp table → variables; returns OBJECT |
-| `usp_Stress_MultiResultSets` | `SP_MULTI_RESULT_DEMO(customer_id)` | `02_stress_procs.sql` | Multiple result sets → single VARIANT |
-| `usp_Stress_WaitForShort` | `SP_WAITFOR_SHORT()` | `02_stress_procs.sql` | `WAITFOR DELAY` → `SYSTEM$WAIT` |
-| `usp_Stress_TempTableDynamicPivot` | `SP_DYNAMIC_PIVOT()` | `02_stress_procs.sql` | `PIVOT` + `EXECUTE IMMEDIATE` |
-| `usp_Stress_ScopedTempTableCaller/Callee` | Not ported | N/A | Snowflake temp tables don't cross SP call boundaries |
-| `usp_Stress_TvpAppendOrderLines(@tvp)` | `SP_TVP_APPEND_ORDER_LINES(order_id, lines VARIANT)` | `02_stress_procs.sql` | TVP → VARIANT array + FLATTEN |
-| `usp_Stress_OpenJsonApplyPatch` | `SP_PATCH_PRODUCTS_FROM_JSON(variant)` | `02_stress_procs.sql` | `OPENJSON` → `FLATTEN` |
-| `usp_Erp_DynamicDeptReport` | `SP_ERP_DYNAMIC_DEPT_REPORT(...)` | `03_erp_procs.sql` | Dynamic ORDER BY with whitelist |
-| `usp_Erp_ClosePayrollRun(@RunId)` | `SP_ERP_CLOSE_PAYROLL_RUN(run_id)` | `03_erp_procs.sql` | Direct port |
-| `usp_Crm_MergeAccountsFromJson` | `SP_CRM_MERGE_ACCOUNTS_FROM_JSON(variant)` | `04_crm_procs.sql` | `OPENJSON` → `FLATTEN` |
-| `usp_Crm_ListPipeline(@Region)` | `SP_CRM_LIST_PIPELINE(region)` | `04_crm_procs.sql` | Direct port |
-| `usp_Inv_StockXml(@WhId)` | `SP_INV_STOCK_XML(wh_id)` | `udfs/02_xml_snowpark.py` | Snowpark Python |
-| `usp_Inv_DynamicWhFilter` | `SP_INV_DYNAMIC_WH_FILTER(wh_code)` | `05_inventory_procs.sql` | `EXECUTE IMMEDIATE` with quote-escaped param |
+| `usp_RefreshOrderTotals(@OrderId)` | `SP_REFRESH_ORDER_TOTALS(order_id)` | Direct port |
+| `usp_ListOpenOrders` | `SP_LIST_OPEN_ORDERS()` | Returns RESULTSET |
+| `usp_Stress_DynamicSearchOrders` | `SP_DYNAMIC_SEARCH_ORDERS(...)` | `sp_executesql` → `EXECUTE IMMEDIATE` |
+| `usp_Stress_CursorRepriceProductsByCategory` | `SP_REPRICE_PRODUCTS_BY_CATEGORY(...)` | Cursor removed; set-based UPDATE |
+| `usp_Stress_MergeUpsertCustomers(@json)` | `SP_MERGE_UPSERT_CUSTOMERS(variant)` | `OPENJSON` → `FLATTEN` |
+| `usp_Stress_XmlOrderDocument(@OrderId)` | `SP_XML_ORDER_DOCUMENT(order_id)` | Snowpark Python — no native XML type in Snowflake |
+| `usp_Stress_JsonOrderLines(@OrderId)` | `SP_JSON_ORDER_LINES(order_id)` | `FOR JSON PATH` → `ARRAY_AGG + OBJECT_CONSTRUCT` |
+| `usp_Stress_ChainedA/B/C` | `SP_CHAINED_A/B/C` | Nested `CALL` statements |
+| `usp_Stress_RecursiveCategoryClosure` | `SP_BUILD_CATEGORY_CLOSURE()` | `WITH RECURSIVE` CTE — Snowflake supports this natively |
+| `usp_Stress_SavePointPartialRollback` | Not ported | Snowflake has no `SAVE TRANSACTION` |
+| `usp_Stress_ThrowCatchAndRethrow` | `SP_THROW_CATCH_RETHROW()` | `BEGIN TRY/CATCH` → `EXCEPTION WHEN OTHER THEN` |
+| `usp_Stress_OutputMergePriceHistory` | `SP_UPDATE_PRICE_WITH_HISTORY(...)` | `OUTPUT` clause → read old value before update |
+| `usp_Stress_WhileBatchNumbers(@n)` | `SP_WHILE_BATCH_NUMBERS(n)` | Temp table → variables; returns OBJECT |
+| `usp_Stress_MultiResultSets` | `SP_MULTI_RESULT_DEMO(customer_id)` | Multiple result sets → single VARIANT |
+| `usp_Stress_WaitForShort` | `SP_WAITFOR_SHORT()` | `WAITFOR DELAY` → `SYSTEM$WAIT` |
+| `usp_Stress_TempTableDynamicPivot` | `SP_DYNAMIC_PIVOT()` | `PIVOT` + `EXECUTE IMMEDIATE` |
+| `usp_Stress_ScopedTempTableCaller/Callee` | Not ported | Snowflake temp tables don't cross SP call boundaries |
+| `usp_Stress_TvpAppendOrderLines(@tvp)` | `SP_TVP_APPEND_ORDER_LINES(order_id, lines VARIANT)` | TVP → VARIANT array + FLATTEN |
+| `usp_Stress_OpenJsonApplyPatch` | `SP_PATCH_PRODUCTS_FROM_JSON(variant)` | `OPENJSON` → `FLATTEN` |
+| `usp_Erp_DynamicDeptReport` | `SP_ERP_DYNAMIC_DEPT_REPORT(...)` | Dynamic ORDER BY with whitelist |
+| `usp_Erp_ClosePayrollRun(@RunId)` | `SP_ERP_CLOSE_PAYROLL_RUN(run_id)` | Direct port |
+| `usp_Crm_MergeAccountsFromJson` | `SP_CRM_MERGE_ACCOUNTS_FROM_JSON(variant)` | `OPENJSON` → `FLATTEN` |
+| `usp_Crm_ListPipeline(@Region)` | `SP_CRM_LIST_PIPELINE(region)` | Direct port |
+| `usp_Inv_StockXml(@WhId)` | `SP_INV_STOCK_XML(wh_id)` | Snowpark Python |
+| `usp_Inv_DynamicWhFilter` | `SP_INV_DYNAMIC_WH_FILTER(wh_code)` | `EXECUTE IMMEDIATE` with quote-escaped param |
 
 ### Triggers
 
-Snowflake has no triggers. DML triggers split into two categories:
+Snowflake has no triggers. The lab handles this two ways depending on what the trigger was doing.
 
-**Audit / side-effect triggers → Streams + Tasks** (async, fire within ~1 minute):
+**Audit and side-effect triggers become Streams + Tasks** (async, fire within about 1 minute):
 
-| SQL Server trigger | Snowflake stream | Snowflake task | File |
+| SQL Server | Snowflake stream | Snowflake task | File |
 |---|---|---|---|
 | `tr_Orders_Audit_IU` | `STREAM_ORDERS_CHANGES` | `TASK_ORDERS_AUDIT` | `01_stressdb_streams.sql` |
 | `tr_OrderItems_RecalcAndQueue` | `STREAM_ORDER_ITEMS_CHANGES` | `TASK_ORDER_ITEMS_RECALC` | `01_stressdb_streams.sql` |
@@ -194,9 +362,11 @@ Snowflake has no triggers. DML triggers split into two categories:
 | `tr_Employees_Audit` | `STREAM_ERP_EMPLOYEES_CHANGES` | `TASK_ERP_EMPLOYEES_AUDIT` | `02_erp_streams.sql` |
 | `tr_PayrollLines_Recalc` | `STREAM_ERP_PAYROLL_LINES_CHANGES` | `TASK_ERP_PAYROLL_RECALC` | `02_erp_streams.sql` |
 | `tr_Accounts_Activity` | `STREAM_CRM_ACCOUNTS_CHANGES` | `TASK_CRM_ACCOUNTS_ACTIVITY` | `03_crm_streams.sql` |
-| `tr_Sku_NoNegativeCost` (monitor only) | `STREAM_INV_SKU_CHANGES` | `TASK_INV_SKU_COST_GUARD` | `04_inventory_streams.sql` |
+| `tr_Sku_NoNegativeCost` | `STREAM_INV_SKU_CHANGES` | `TASK_INV_SKU_COST_GUARD` | `04_inventory_streams.sql` |
 
-**INSTEAD OF triggers → Stored procedures** (callers must call the SP, not write directly):
+One thing to know: Snowflake Tasks are suspended by default. Airflow DAG 1 resumes them before the Bronze MERGE and suspends them after. This is intentional — you don't want tasks firing while a MERGE is in progress.
+
+**INSTEAD OF triggers become stored procedures** (callers must use the SP, not write directly to the table):
 
 | SQL Server trigger | Snowflake SP | File |
 |---|---|---|
@@ -205,48 +375,156 @@ Snowflake has no triggers. DML triggers split into two categories:
 | `tr_vw_StockOrders_IOI` (INSTEAD OF INSERT) | `SP_INV_SOFT_INSERT_STOCK_ORDER(...)` | `05_inventory_procs.sql` |
 | `tr_Opportunities_StageGuard` (AFTER UPDATE) | `SP_CRM_UPDATE_OPPORTUNITY_STAGE(opp_id, stage)` | `04_crm_procs.sql` |
 
+### Constraints
+
+| SQL Server | Snowflake | Notes |
+|---|---|---|
+| `OrderItems.Quantity CHECK (Quantity > 0)` | `NOT ENFORCED` constraint | Enforced inside `SP_TVP_APPEND_ORDER_LINES` |
+| `Orders.Status DEFAULT 'Open'` | Column `DEFAULT 'Open'` | Supported natively |
+| `Customers.Country DEFAULT 'US'` | Column `DEFAULT 'US'` | Supported natively |
+| `OrderItems.LineTotal PERSISTED computed` | Stored as `LINE_TOTAL NUMBER(18,4)` | Computed during MERGE, no computed columns in Snowflake |
+| `Products.SKU UNIQUE` | `UNIQUE NOT ENFORCED` | Enforced by MERGE dedup logic |
+| `Orders → Customers FK` | `FOREIGN KEY NOT ENFORCED` | Declared but not enforced at write time |
+
 ### Functions
 
 | SQL Server | Snowflake | Location |
 |---|---|---|
-| `fn_FormatMoney(@amount)` scalar UDF | `FN_FORMAT_MONEY(amount)` SQL UDF | `udfs/01_scalar_udfs.sql` + `udfs.tf` |
-| `fn_OrderLineCount(@orderId)` inline TVF | `FN_ORDER_LINE_COUNT(order_id)` scalar UDF | `udfs/01_scalar_udfs.sql` + `udfs.tf` |
+| `fn_FormatMoney(@amount)` scalar UDF | `FN_FORMAT_MONEY(amount)` SQL UDF | `udfs/01_scalar_udfs.sql` |
+| `fn_OrderLineCount(@orderId)` inline TVF | `FN_ORDER_LINE_COUNT(order_id)` scalar UDF | `udfs/01_scalar_udfs.sql` |
 
-## Testing
+---
 
-Run after `terraform apply` completes:
+## DMS vs Airbyte — which to use
+
+This lab supports both. Here's an honest comparison:
+
+| | AWS DMS | Airbyte |
+|---|---|---|
+| Setup complexity | High — IAM, VPC, DMS instance, replication task, Snowpipe, S3 | Low — one `docker compose up` |
+| Data durability | Parquet files in S3 (retain forever) | No intermediate storage |
+| Source support | SQL Server, Oracle, MySQL, PostgreSQL, MongoDB, and more | 300+ connectors including SaaS APIs |
+| CDC support | Yes, via native CDC | Yes, via CDC or STANDARD mode |
+| Cost | DMS replication instance runs 24/7 even when idle | Free OSS; Airbyte Cloud has usage pricing |
+| Best for | AWS-native shops, regulated environments needing audit trail | Faster setup, many heterogeneous sources |
+
+If your company is already on AWS and you need an audit trail of raw source data, DMS is the better choice. If you need to pull from Salesforce, Hubspot, and SQL Server into the same warehouse, Airbyte covers all of them without extra plumbing.
+
+---
+
+## Credential security
+
+Your `.env` file contains real credentials and must never be committed to git. It is in `.gitignore` — verify with:
+
+```bash
+git check-ignore -v .env
+```
+
+If it's not listed, add `.env` to `.gitignore` immediately and rotate any credentials that were already committed.
+
+The `.env.example` file shows every variable this lab needs. Copy it to `.env` and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+For production, use a secret manager (AWS Secrets Manager, HashiCorp Vault) instead of `.env` files. Terraform supports Vault and SSM Parameter Store natively.
+
+---
+
+## Smoke tests after setup
+
+After Terraform apply and a successful DMS load, run these in Snowflake to verify the migration:
 
 ```sql
--- Verify supporting tables exist
-SELECT COUNT(*) FROM BRONZE.MIGRATION_AUDIT_LOG;
-SELECT COUNT(*) FROM BRONZE.ORDER_EVENT_QUEUE;
+-- Basic counts
+SELECT COUNT(*) FROM BRONZE.CUSTOMERS;
+SELECT COUNT(*) FROM BRONZE.ORDERS;
 
--- Basic procedure smoke tests
+-- Procedure smoke test
 CALL BRONZE.SP_LIST_OPEN_ORDERS();
-CALL BRONZE.SP_REFRESH_ORDER_TOTALS(NULL);
 CALL BRONZE.SP_DYNAMIC_SEARCH_ORDERS('Open', NULL, NULL, 'ORDER_DATE', 'DESC');
-CALL BRONZE.FN_FORMAT_MONEY(12345.678);
 
--- Chained proc test (should append [C][B][A] to Notes)
+-- UDF
+SELECT BRONZE.FN_FORMAT_MONEY(12345.678);
+
+-- Chained proc (appends [C][B][A] to notes)
 CALL BRONZE.SP_CHAINED_A_OUTER(1);
 SELECT NOTES FROM BRONZE.ORDERS WHERE ORDER_ID = 1;
 
--- MERGE upsert test
-CALL BRONZE.SP_MERGE_UPSERT_CUSTOMERS(
-    PARSE_JSON('[{"CustomerCode":"TST99","FullName":"Test User","Email":"t@t.com","Country":"CA"}]')
-);
-SELECT * FROM BRONZE.CUSTOMERS WHERE CUSTOMER_CODE = 'TST99';
-
--- Trigger replacement test: soft delete
-CALL BRONZE.SP_SOFT_DELETE_ORDER(999);
-
--- Stream check (after any INSERT/UPDATE to BRONZE.ORDERS)
+-- Stream check (needs a row in BRONZE.ORDERS first)
 SELECT SYSTEM$STREAM_HAS_DATA('BRONZE.STREAM_ORDERS_CHANGES');
 
--- Task run history
+-- Task history
 SELECT NAME, STATE, COMPLETED_TIME, ERROR_MESSAGE
 FROM TABLE(INFORMATION_SCHEMA.TASK_HISTORY(
     SCHEDULED_TIME_RANGE_START => DATEADD('hour', -1, CURRENT_TIMESTAMP()),
     TASK_NAME => 'TASK_ORDERS_AUDIT'
 ));
+
+-- dbt test results (run via Airflow DAG 4 or directly)
+-- Should show 27 PASS, 3 WARN
 ```
+
+---
+
+## Cost estimate
+
+Running this lab for one day on AWS:
+
+| Component | Approximate cost |
+|---|---|
+| DMS replication instance (dms.t3.medium) | $0.12/hr ≈ $3/day |
+| RDS SQL Server SE (db.t3.medium) | $0.10/hr ≈ $2.40/day |
+| S3 storage for Parquet files | < $0.01 |
+| Snowflake X-SMALL warehouse (auto-suspend 60s) | ~$1-2/day depending on query volume |
+
+Tear down when done:
+
+```bash
+terraform destroy -chdir=infra/terraform/aws
+terraform destroy -chdir=infra/terraform/snowflake
+docker compose down -v   # in sqlserver/, airflow/, airbyte/
+```
+
+---
+
+## Troubleshooting
+
+**DMS task shows "Load complete" but RAW_DMS_VARIANT is empty**
+Check Snowpipe: `SELECT * FROM TABLE(INFORMATION_SCHEMA.COPY_HISTORY(...))`. If errors show, it's usually the storage integration — the IAM trust relationship between Snowflake and your S3 bucket needs the Snowflake AWS account ID and external ID that Terraform output after `apply`.
+
+**Airflow Bronze MERGE fails with `Duplicate row detected during DML action`**
+This happens when the source subquery returns two rows with the same primary key. The root cause is usually `SELECT DISTINCT` not deduplicating rows with different computed column values (`CURRENT_TIMESTAMP()` differs per row). The fix is `QUALIFY ROW_NUMBER() OVER (PARTITION BY <pk>) = 1` in the MERGE source query.
+
+**ExternalTaskSensor polls forever and never succeeds**
+The sensor matches by exact `execution_date`. Trigger downstream DAGs with `--exec-date` equal to the upstream DAG's execution_date. You can find it in the Airflow UI under the upstream DAG run's details.
+
+**dbt fails with `--profiles-dir is not a valid option`**
+This is a dbt 1.x breaking change. The flag `--profiles-dir` is not valid as a global pre-command flag. Set `ENV DBT_PROFILES_DIR=/opt/dbt` in the Dockerfile and use `ENTRYPOINT ["dbt"]` without arguments.
+
+**Airbyte sync fails with `Cannot connect to host.docker.internal`**
+On Linux, `host.docker.internal` isn't automatically available. Add `--add-host=host.docker.internal:host-gateway` to your Docker run, or add it under `extra_hosts` in the docker-compose service definition.
+
+---
+
+## CI/CD
+
+GitHub Actions at `.github/workflows/migration-cicd.yml`:
+
+| Trigger | Jobs |
+|---|---|
+| PR to main | CDK synth + terraform validate + dbt parse |
+| Push to main | CDK deploy + terraform apply (Snowflake + AWS DMS) |
+
+Required GitHub Secrets:
+
+| Secret | Description |
+|---|---|
+| `AWS_ROLE_ARN` | OIDC IAM role ARN |
+| `AWS_REGION` | e.g. `us-east-1` |
+| `TF_STATE_BUCKET` | S3 bucket for Terraform state |
+| `SNOWFLAKE_ACCOUNT` | Snowflake account identifier |
+| `SNOWFLAKE_USER` | Snowflake service user |
+| `DMS_BUCKET_NAME` | DMS landing S3 bucket |
+| `SNOWFLAKE_S3_ROLE_ARN` | IAM role ARN for Snowflake storage integration |
