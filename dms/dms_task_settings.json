@@ -1,4 +1,5 @@
 {
+  "_comment": "Set MigrationType to full-load-and-cdc in the DMS console or CLI when creating/modifying the task. This settings file controls the behavior — the migration type is set separately.",
   "TargetMetadata": {
     "TargetSchema": "",
     "SupportLobs": true,
@@ -11,7 +12,7 @@
   "FullLoadSettings": {
     "TargetTablePrepMode": "DO_NOTHING",
     "CreatePkAfterFullLoad": false,
-    "StopTaskCachedChangesApplied": false,
+    "StopTaskCachedChangesApplied": true,
     "StopTaskCachedChangesNotApplied": false,
     "MaxFullLoadSubTasks": 8,
     "TransactionConsistencyTimeout": 600,
@@ -20,9 +21,11 @@
   "Logging": {
     "EnableLogging": true,
     "LogComponents": [
-      { "Id": "SOURCE_UNLOAD", "Severity": "LOGGER_SEVERITY_DEFAULT" },
-      { "Id": "TARGET_LOAD", "Severity": "LOGGER_SEVERITY_DEFAULT" },
-      { "Id": "TASK_MANAGER", "Severity": "LOGGER_SEVERITY_DEFAULT" }
+      { "Id": "SOURCE_UNLOAD",  "Severity": "LOGGER_SEVERITY_DEFAULT" },
+      { "Id": "TARGET_LOAD",    "Severity": "LOGGER_SEVERITY_DEFAULT" },
+      { "Id": "TASK_MANAGER",   "Severity": "LOGGER_SEVERITY_DEFAULT" },
+      { "Id": "CDC_SOURCE",     "Severity": "LOGGER_SEVERITY_DETAILED_DEBUG" },
+      { "Id": "CDC_TARGET",     "Severity": "LOGGER_SEVERITY_DEFAULT" }
     ]
   },
   "ControlTablesSettings": {

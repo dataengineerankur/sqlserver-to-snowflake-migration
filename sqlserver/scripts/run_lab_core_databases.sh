@@ -87,4 +87,9 @@ run_sql_file "01a_create_additional_lab_databases" "${SQL_DIR}/01a_create_additi
 run_sql_file "20_lab_erp" "${SQL_DIR}/20_lab_erp.sql" 1
 run_sql_file "21_lab_crm" "${SQL_DIR}/21_lab_crm.sql" 1
 run_sql_file "22_lab_inventory" "${SQL_DIR}/22_lab_inventory.sql" 1
-echo "Done. Databases: SnowConvertStressDB, LabERP_DB, LabCRM_DB, LabInventory_DB (20–22 objects in Lab* DBs)."
+
+# Enable CDC on all databases and tables so DMS runs full-load-and-cdc (not full-load only).
+# Requires SQL Server Agent to be running inside the container.
+run_sql_file "11_enable_cdc" "${SQL_DIR}/11_enable_cdc.sql" 1
+
+echo "Done. Databases: SnowConvertStressDB, LabERP_DB, LabCRM_DB, LabInventory_DB (20–22 objects in Lab* DBs). CDC enabled on all tables."
