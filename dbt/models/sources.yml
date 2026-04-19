@@ -1,11 +1,105 @@
 version: 2
 
 sources:
-  - name: raw
-    database: "{{ env_var('SNOWFLAKE_DATABASE', 'ANALYTICS') }}"
-    schema: RAW
+  - name: bronze
+    database: "{{ env_var('SNOWFLAKE_DATABASE', 'MSSQL_MIGRATION_LAB') }}"
+    schema: BRONZE
+    description: >
+      Flattened, typed Bronze tables loaded from S3 via Snowpipe.
+      Each row carries _DMS_OPERATION, _DMS_COMMIT_TS, _LOADED_AT, _SOURCE_DB metadata.
+
     tables:
+      # ── StressTest / Orders domain ───────────────────────────────────────
       - name: customers
+        description: SQL Server SnowConvertStressDB.dbo.Customers
+        columns:
+          - name: CUSTOMER_ID
+            tests: [not_null, unique]
+          - name: EMAIL
+            tests: [not_null]
+          - name: _LOADED_AT
+            tests: [not_null]
+
       - name: products
+        description: SQL Server SnowConvertStressDB.dbo.Products
+        columns:
+          - name: PRODUCT_ID
+            tests: [not_null, unique]
+
+      - name: categories
+        description: SQL Server SnowConvertStressDB.dbo.Categories
+
       - name: orders
+        description: SQL Server SnowConvertStressDB.dbo.Orders
+        columns:
+          - name: ORDER_ID
+            tests: [not_null, unique]
+
       - name: order_items
+        description: SQL Server SnowConvertStressDB.dbo.OrderItems
+        columns:
+          - name: ORDER_ITEM_ID
+            tests: [not_null, unique]
+
+      # ── ERP domain ───────────────────────────────────────────────────────
+      - name: erp_departments
+        description: SQL Server ErpDB.dbo.Departments
+        columns:
+          - name: DEPT_ID
+            tests: [not_null, unique]
+
+      - name: erp_employees
+        description: SQL Server ErpDB.dbo.Employees
+        columns:
+          - name: EMP_ID
+            tests: [not_null, unique]
+
+      - name: erp_payroll_runs
+        description: SQL Server ErpDB.dbo.PayrollRuns (header — run date/period)
+        columns:
+          - name: RUN_ID
+            tests: [not_null, unique]
+
+      - name: erp_payroll_lines
+        description: SQL Server ErpDB.dbo.PayrollLines (per-employee amounts per run)
+        columns:
+          - name: LINE_ID
+            tests: [not_null, unique]
+
+      # ── CRM domain ───────────────────────────────────────────────────────
+      - name: crm_accounts
+        description: SQL Server CrmDB.dbo.Accounts
+        columns:
+          - name: ACCOUNT_ID
+            tests: [not_null, unique]
+
+      - name: crm_contacts
+        description: SQL Server CrmDB.dbo.Contacts
+        columns:
+          - name: CONTACT_ID
+            tests: [not_null, unique]
+
+      - name: crm_opportunities
+        description: SQL Server CrmDB.dbo.Opportunities
+        columns:
+          - name: OPP_ID
+            tests: [not_null, unique]
+
+      # ── Inventory domain ─────────────────────────────────────────────────
+      - name: inv_warehouses
+        description: SQL Server InventoryDB.dbo.Warehouses
+        columns:
+          - name: WH_ID
+            tests: [not_null, unique]
+
+      - name: inv_sku
+        description: SQL Server InventoryDB.dbo.SKU (product catalogue for inventory)
+        columns:
+          - name: SKU_ID
+            tests: [not_null, unique]
+
+      - name: inv_stock_movements
+        description: SQL Server InventoryDB.dbo.StockMovements (immutable journal)
+        columns:
+          - name: MOV_ID
+            tests: [not_null, unique]

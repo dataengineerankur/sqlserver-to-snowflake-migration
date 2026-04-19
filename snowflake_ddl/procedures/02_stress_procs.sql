@@ -1,0 +1,426 @@
+USE DATABASE MSSQL_MIGRATION_LAB;
+USE SCHEMA BRONZE;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_DYNAMIC_SEARCH_ORDERS(
+    P_STATUS     VARCHAR,
+    P_COUNTRY    VARCHAR,
+    P_MIN_TOTAL  NUMBER,
+    P_SORT_COL   VARCHAR,
+    P_SORT_DIR   VARCHAR
+)
+RETURNS TABLE()
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_safe_col  VARCHAR;
+    v_safe_dir  VARCHAR;
+    v_where     VARCHAR DEFAULT '';
+    v_sql       VARCHAR;
+    res         RESULTSET;
+BEGIN
+    v_safe_col := CASE
+        WHEN UPPER(P_SORT_COL) IN ('ORDER_DATE','TOTAL_AMOUNT','ORDER_ID','STATUS')
+            THEN UPPER(P_SORT_COL)
+        ELSE 'ORDER_DATE'
+    END;
+    v_safe_dir := CASE WHEN UPPER(P_SORT_DIR) = 'ASC' THEN 'ASC' ELSE 'DESC' END;
+
+    IF (P_STATUS IS NOT NULL) THEN
+        v_where := v_where || ' AND o.STATUS = ''' || P_STATUS || '''';
+    END IF;
+    IF (P_COUNTRY IS NOT NULL) THEN
+        v_where := v_where || ' AND c.COUNTRY = ''' || P_COUNTRY || '''';
+    END IF;
+    IF (P_MIN_TOTAL IS NOT NULL) THEN
+        v_where := v_where || ' AND o.TOTAL_AMOUNT >= ' || P_MIN_TOTAL;
+    END IF;
+
+    v_sql := '
+        SELECT o.ORDER_ID, o.ORDER_DATE, o.STATUS, o.TOTAL_AMOUNT,
+               c.CUSTOMER_CODE, c.COUNTRY
+        FROM BRONZE.ORDERS o
+        JOIN BRONZE.CUSTOMERS c ON c.CUSTOMER_ID = o.CUSTOMER_ID
+        WHERE 1=1' || v_where ||
+        ' ORDER BY ' || v_safe_col || ' ' || v_safe_dir;
+
+    res := (EXECUTE IMMEDIATE :v_sql);
+    RETURN TABLE(res);
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_REPRICE_PRODUCTS_BY_CATEGORY(
+    P_CATEGORY_ID  NUMBER,
+    P_PCT_BUMP     NUMBER
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    UPDATE BRONZE.PRODUCTS
+    SET LIST_PRICE = ROUND(LIST_PRICE * (1 + :P_PCT_BUMP), 4)
+    WHERE CATEGORY_ID = :P_CATEGORY_ID
+      AND IS_ACTIVE = TRUE;
+
+    RETURN 'Updated ' || SQLROWCOUNT || ' products';
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_MERGE_UPSERT_CUSTOMERS(P_SOURCE_JSON VARIANT)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    MERGE INTO BRONZE.CUSTOMERS tgt
+    USING (
+        SELECT
+            value:CustomerCode::VARCHAR  AS CUSTOMER_CODE,
+            value:FullName::VARCHAR      AS FULL_NAME,
+            value:Email::VARCHAR         AS EMAIL,
+            value:Country::VARCHAR       AS COUNTRY
+        FROM TABLE(FLATTEN(input => :P_SOURCE_JSON))
+    ) src ON tgt.CUSTOMER_CODE = src.CUSTOMER_CODE
+    WHEN MATCHED THEN
+        UPDATE SET
+            FULL_NAME = src.FULL_NAME,
+            EMAIL     = src.EMAIL,
+            COUNTRY   = src.COUNTRY
+    WHEN NOT MATCHED THEN
+        INSERT (CUSTOMER_CODE, FULL_NAME, EMAIL, COUNTRY)
+        VALUES (src.CUSTOMER_CODE, src.FULL_NAME, src.EMAIL,
+                COALESCE(src.COUNTRY, 'US'));
+
+    RETURN 'Merged ' || SQLROWCOUNT || ' customer rows';
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_JSON_ORDER_LINES(P_ORDER_ID NUMBER)
+RETURNS VARIANT
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_result VARIANT;
+BEGIN
+    SELECT ARRAY_AGG(
+        OBJECT_CONSTRUCT(
+            'order_item_id', oi.ORDER_ITEM_ID,
+            'product_id',    oi.PRODUCT_ID,
+            'quantity',      oi.QUANTITY,
+            'unit_price',    oi.UNIT_PRICE,
+            'line_total',    oi.LINE_TOTAL,
+            'sku',           p.SKU
+        )
+    ) INTO v_result
+    FROM BRONZE.ORDER_ITEMS oi
+    JOIN BRONZE.PRODUCTS p ON p.PRODUCT_ID = oi.PRODUCT_ID
+    WHERE oi.ORDER_ID = :P_ORDER_ID;
+
+    RETURN v_result;
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_CHAINED_C_INNER(P_ORDER_ID NUMBER)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    UPDATE BRONZE.ORDERS
+    SET NOTES = COALESCE(NOTES, '') || ' [C]'
+    WHERE ORDER_ID = :P_ORDER_ID;
+
+    RETURN 'C';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_CHAINED_B_MIDDLE(P_ORDER_ID NUMBER)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_result VARCHAR;
+BEGIN
+    CALL BRONZE.SP_CHAINED_C_INNER(:P_ORDER_ID) INTO v_result;
+
+    UPDATE BRONZE.ORDERS
+    SET NOTES = COALESCE(NOTES, '') || ' [B]'
+    WHERE ORDER_ID = :P_ORDER_ID;
+
+    RETURN v_result || 'B';
+END;
+$$;
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_CHAINED_A_OUTER(P_ORDER_ID NUMBER)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_result VARCHAR;
+BEGIN
+    CALL BRONZE.SP_CHAINED_B_MIDDLE(:P_ORDER_ID) INTO v_result;
+
+    UPDATE BRONZE.ORDERS
+    SET NOTES = COALESCE(NOTES, '') || ' [A]'
+    WHERE ORDER_ID = :P_ORDER_ID;
+
+    RETURN v_result || 'A';
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_BUILD_CATEGORY_CLOSURE()
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    TRUNCATE TABLE BRONZE.CATEGORY_CLOSURE;
+
+    INSERT INTO BRONZE.CATEGORY_CLOSURE (ANCESTOR_ID, DESCENDANT_ID, DEPTH)
+    SELECT CATEGORY_ID, CATEGORY_ID, 0
+    FROM BRONZE.CATEGORIES;
+
+    INSERT INTO BRONZE.CATEGORY_CLOSURE (ANCESTOR_ID, DESCENDANT_ID, DEPTH)
+    WITH edges AS (
+        SELECT p.CATEGORY_ID AS parent_id, c.CATEGORY_ID AS child_id
+        FROM BRONZE.CATEGORIES p
+        JOIN BRONZE.CATEGORIES c ON c.CATEGORY_ID > p.CATEGORY_ID
+        WHERE ABS(HASH(p.CATEGORY_ID, c.CATEGORY_ID)) % 3 = 0
+    ),
+    walk (ancestor_id, descendant_id, depth) AS (
+        SELECT parent_id, child_id, 1 FROM edges
+        UNION ALL
+        SELECT w.ancestor_id, e.child_id, w.depth + 1
+        FROM walk w
+        JOIN edges e ON e.parent_id = w.descendant_id
+        WHERE w.depth < 5
+    )
+    SELECT DISTINCT ancestor_id, descendant_id, depth
+    FROM walk
+    WHERE NOT EXISTS (
+        SELECT 1 FROM BRONZE.CATEGORY_CLOSURE cc
+        WHERE cc.ANCESTOR_ID = walk.ancestor_id
+          AND cc.DESCENDANT_ID = walk.descendant_id
+    );
+
+    RETURN (SELECT COUNT(*)::VARCHAR FROM BRONZE.CATEGORY_CLOSURE) || ' closure rows';
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_THROW_CATCH_RETHROW()
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    stress_error EXCEPTION (-20001, 'Stress: intentional error for migration harness');
+BEGIN
+    RAISE stress_error;
+EXCEPTION
+    WHEN stress_error THEN
+        INSERT INTO BRONZE.MIGRATION_AUDIT_LOG
+            (TABLE_NAME, DML_ACTION, ROW_PK, NEW_PAYLOAD, SQL_TRIGGER)
+        VALUES
+            ('_ERROR_', 'CATCH', '', PARSE_JSON('"' || SQLERRM || '"'),
+             'SP_THROW_CATCH_RETHROW');
+        RAISE;
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_UPDATE_PRICE_WITH_HISTORY(
+    P_PRODUCT_ID  NUMBER,
+    P_NEW_PRICE   NUMBER
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_old_price NUMBER(18,4);
+BEGIN
+    SELECT LIST_PRICE INTO v_old_price
+    FROM BRONZE.PRODUCTS
+    WHERE PRODUCT_ID = :P_PRODUCT_ID;
+
+    UPDATE BRONZE.PRODUCTS
+    SET LIST_PRICE = :P_NEW_PRICE
+    WHERE PRODUCT_ID = :P_PRODUCT_ID;
+
+    INSERT INTO BRONZE.PRODUCT_PRICE_HISTORY (PRODUCT_ID, OLD_PRICE, NEW_PRICE)
+    VALUES (:P_PRODUCT_ID, v_old_price, :P_NEW_PRICE);
+
+    RETURN 'old=' || v_old_price || ' new=' || P_NEW_PRICE;
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_WHILE_BATCH_NUMBERS(P_ITERATIONS NUMBER)
+RETURNS OBJECT
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_cap NUMBER DEFAULT 1000;
+BEGIN
+    v_cap := LEAST(COALESCE(:P_ITERATIONS, 1000), 5000);
+    RETURN OBJECT_CONSTRUCT(
+        'num_rows', v_cap,
+        'sum_n',    v_cap * (v_cap + 1) / 2
+    );
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_WAITFOR_SHORT()
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    CALL SYSTEM$WAIT(1, 'MILLISECONDS');
+    RETURN 'OK';
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_DYNAMIC_PIVOT()
+RETURNS TABLE()
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_cols  VARCHAR;
+    v_sql   VARCHAR;
+    res     RESULTSET;
+BEGIN
+    SELECT LISTAGG(DISTINCT '''' || STATUS || '''', ',')
+           WITHIN GROUP (ORDER BY STATUS)
+    INTO v_cols
+    FROM BRONZE.ORDERS;
+
+    IF (v_cols IS NULL OR v_cols = '') THEN
+        v_cols := '''Open''';
+    END IF;
+
+    v_sql := '
+        SELECT *
+        FROM BRONZE.ORDERS
+        PIVOT (SUM(TOTAL_AMOUNT) FOR STATUS IN (' || v_cols || ')) p';
+
+    res := (EXECUTE IMMEDIATE :v_sql);
+    RETURN TABLE(res);
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_TVP_APPEND_ORDER_LINES(
+    P_ORDER_ID   NUMBER,
+    P_LINES      VARIANT
+)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    INSERT INTO BRONZE.ORDER_ITEMS (ORDER_ID, PRODUCT_ID, QUANTITY, UNIT_PRICE)
+    SELECT
+        :P_ORDER_ID,
+        value:ProductId::NUMBER,
+        value:Quantity::NUMBER,
+        value:UnitPrice::NUMBER(18,4)
+    FROM TABLE(FLATTEN(input => :P_LINES));
+
+    CALL BRONZE.SP_REFRESH_ORDER_TOTALS(:P_ORDER_ID);
+
+    RETURN 'Inserted ' || SQLROWCOUNT || ' lines';
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_PATCH_PRODUCTS_FROM_JSON(P_PATCH_JSON VARIANT)
+RETURNS VARCHAR
+LANGUAGE SQL
+AS
+$$
+BEGIN
+    UPDATE BRONZE.PRODUCTS p
+    SET
+        LIST_PRICE = COALESCE(src.NEW_PRICE::NUMBER(18,4), p.LIST_PRICE),
+        IS_ACTIVE  = COALESCE(src.IS_ACTIVE::BOOLEAN, p.IS_ACTIVE)
+    FROM (
+        SELECT
+            value:ProductId::NUMBER     AS PRODUCT_ID,
+            value:NewPrice              AS NEW_PRICE,
+            value:IsActive              AS IS_ACTIVE
+        FROM TABLE(FLATTEN(input => :P_PATCH_JSON))
+    ) src
+    WHERE p.PRODUCT_ID = src.PRODUCT_ID;
+
+    RETURN 'Patched ' || SQLROWCOUNT || ' products';
+END;
+$$;
+
+
+CREATE OR REPLACE PROCEDURE BRONZE.SP_MULTI_RESULT_DEMO(P_CUSTOMER_ID NUMBER)
+RETURNS VARIANT
+LANGUAGE SQL
+AS
+$$
+DECLARE
+    v_customer  VARIANT;
+    v_orders    VARIANT;
+    v_items     VARIANT;
+BEGIN
+    SELECT OBJECT_CONSTRUCT(
+        'CUSTOMER_ID',   CUSTOMER_ID,
+        'CUSTOMER_CODE', CUSTOMER_CODE,
+        'FULL_NAME',     FULL_NAME,
+        'COUNTRY',       COUNTRY
+    ) INTO :v_customer
+    FROM BRONZE.CUSTOMERS
+    WHERE CUSTOMER_ID = :P_CUSTOMER_ID;
+
+    SELECT ARRAY_AGG(
+        OBJECT_CONSTRUCT(
+            'ORDER_ID',     ORDER_ID,
+            'ORDER_DATE',   ORDER_DATE,
+            'STATUS',       STATUS,
+            'TOTAL_AMOUNT', TOTAL_AMOUNT
+        )
+    ) WITHIN GROUP (ORDER BY ORDER_DATE DESC)
+    INTO :v_orders
+    FROM BRONZE.ORDERS
+    WHERE CUSTOMER_ID = :P_CUSTOMER_ID;
+
+    SELECT ARRAY_AGG(
+        OBJECT_CONSTRUCT(
+            'ORDER_ITEM_ID', oi.ORDER_ITEM_ID,
+            'ORDER_ID',      oi.ORDER_ID,
+            'PRODUCT_ID',    oi.PRODUCT_ID,
+            'QUANTITY',      oi.QUANTITY,
+            'LINE_TOTAL',    oi.LINE_TOTAL
+        )
+    ) INTO :v_items
+    FROM BRONZE.ORDER_ITEMS oi
+    JOIN BRONZE.ORDERS o ON o.ORDER_ID = oi.ORDER_ID
+    WHERE o.CUSTOMER_ID = :P_CUSTOMER_ID;
+
+    RETURN OBJECT_CONSTRUCT(
+        'customer', v_customer,
+        'orders',   v_orders,
+        'items',    v_items
+    );
+END;
+$$;

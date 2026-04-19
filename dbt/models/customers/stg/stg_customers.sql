@@ -1,32 +1,39 @@
-WITH source_data AS (
-  SELECT
-    CUSTOMER_ID,
-    FIRST_NAME,
-    LAST_NAME,
-    EMAIL,
-    CREATED_AT,
-    UPDATED_AT,
-    DMS_OP,
-    DMS_COMMIT_TS,
-    DMS_LOAD_TS,
-    DMS_FILE_NAME,
-    COALESCE(DMS_COMMIT_TS, UPDATED_AT, CREATED_AT) AS EFFECTIVE_TS
-  FROM {{ source('raw', 'customers') }}
-  WHERE DMS_OP IS NULL OR DMS_OP != 'D'
+/*
+  Staging: BRONZE.CUSTOMERS → deduplication + delete filtering.
+  Column names aligned to actual BRONZE DDL (FULL_NAME, not FIRST/LAST split).
+  QUALIFY keeps only the most recent DMS version per CUSTOMER_ID.
+*/
+
+WITH source AS (
+    SELECT
+        CUSTOMER_ID,
+        CUSTOMER_CODE,
+        FULL_NAME,
+        EMAIL,
+        COUNTRY,
+        CREATED_AT,
+        _DMS_OPERATION,
+        _DMS_COMMIT_TS,
+        _LOADED_AT,
+        _SOURCE_DB,
+        COALESCE(_DMS_COMMIT_TS, CREATED_AT) AS _EFFECTIVE_TS
+    FROM {{ source('bronze', 'customers') }}
+    WHERE _DMS_OPERATION IS NULL OR _DMS_OPERATION != 'D'
 )
 
 SELECT
-  CUSTOMER_ID,
-  FIRST_NAME,
-  LAST_NAME,
-  EMAIL,
-  CREATED_AT,
-  UPDATED_AT,
-  DMS_COMMIT_TS,
-  DMS_LOAD_TS,
-  DMS_FILE_NAME
-FROM source_data
+    CUSTOMER_ID,
+    CUSTOMER_CODE,
+    FULL_NAME,
+    EMAIL,
+    COUNTRY,
+    CREATED_AT,
+    _DMS_OPERATION,
+    _DMS_COMMIT_TS,
+    _LOADED_AT,
+    _SOURCE_DB
+FROM source
 QUALIFY ROW_NUMBER() OVER (
-  PARTITION BY CUSTOMER_ID
-  ORDER BY EFFECTIVE_TS DESC, DMS_LOAD_TS DESC
+    PARTITION BY CUSTOMER_ID
+    ORDER BY _EFFECTIVE_TS DESC, _LOADED_AT DESC
 ) = 1

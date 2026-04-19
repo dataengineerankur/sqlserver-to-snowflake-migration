@@ -22,7 +22,9 @@ export class DataLandingStack extends cdk.Stack {
     super(scope, id, props);
     const p = props.projectName;
 
-    // Lifecycle rule: move Parquet files to Glacier after 90 days, expire after 365
+    // Lifecycle rule: move Parquet files to Glacier after 90 days, expire after 365.
+    // Glacier IR would be cheaper for data accessed < 1/quarter; standard Glacier chosen
+    // here because migration lab data is essentially write-once after the cutover window.
     const parquetLifecycle: s3.LifecycleRule = {
       id: "parquet-tiering",
       enabled: true,
