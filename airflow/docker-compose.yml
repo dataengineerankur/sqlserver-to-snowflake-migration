@@ -20,18 +20,25 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__WEBSERVER__SECRET_KEY: "migration-lab-secret"
+    # Python path — lets DAGs import from plugins/ and sql/
+    PYTHONPATH: "/opt/airflow/plugins:/opt/airflow/dags"
     # AWS — reuse host credentials (mounted below)
     AWS_PROFILE: test-migration
     AWS_DEFAULT_REGION: us-east-1
     # Airflow connections (overrides UI; edit as needed)
     AIRFLOW_CONN_AWS_DEFAULT: "aws:///?region_name=us-east-1&profile=test-migration"
-    # Variables used by the DAG
+    # Snowflake connection — edit or override per environment
+    AIRFLOW_CONN_SNOWFLAKE_DEFAULT: "snowflake://PATCHIT:Tata8237552399@WBZTWSY-KH99814/MSSQL_MIGRATION_LAB/BRONZE?warehouse=WH_MSSQL_MIGRATION&role=ACCOUNTADMIN"
+    # Variables used by the DAGs
     AIRFLOW_VAR_DMS_BUCKET: "patchit-mssql-migration-dat-dmsmssqlbucket87a82397-vtzwafs65lwt"
     AIRFLOW_VAR_GLUE_BUCKET: "patchit-mssql-migration-da-gluemssqlbucket71eeb701-ninq3nmqyfux"
   volumes:
-    - ./dags:/opt/airflow/dags
+    - ./dags:/opt/airflow/dags          # DAG files + dag_config.py
+    - ./plugins:/opt/airflow/plugins    # snowflake_client.py and other helpers
+    - ./sql:/opt/airflow/sql            # SQL files read by DAGs at runtime
+    - ../dbt:/opt/airflow/dbt           # dbt project (for dbt run/test commands)
+    - ../dbt:/opt/airflow/dbt_profiles  # profiles.yml lives here too
     - airflow-logs:/opt/airflow/logs
-    - airflow-plugins:/opt/airflow/plugins
     # Mount host AWS credentials so the DAG can call AWS APIs
     - ${HOME}/.aws:/home/airflow/.aws:ro
   user: "${AIRFLOW_UID:-50000}:0"
