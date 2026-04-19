@@ -1,0 +1,160 @@
+-- =============================================================================
+-- 02_merge_erp.sql
+-- Domain: ERP  (LabERP_DB)
+-- Tables: ERP_DEPARTMENTS → ERP_EMPLOYEES → ERP_PAYROLL_RUNS → ERP_PAYROLL_LINES
+--
+-- Same MERGE + watermark pattern as 01_merge_orders.sql.
+-- _SOURCE_DB = 'LabERP_DB' is used to distinguish these rows in RAW.
+-- Called from: dag_01_ingest_bronze.py → task group 'erp_domain'
+-- =============================================================================
+
+
+-- ── ERP_DEPARTMENTS ──────────────────────────────────────────────────────────
+MERGE INTO MSSQL_MIGRATION_LAB.BRONZE.ERP_DEPARTMENTS tgt
+USING (
+    SELECT
+        v:DeptId::NUMBER            AS DEPT_ID,
+        v:DeptCode::VARCHAR         AS DEPT_CODE,
+        v:DeptName::VARCHAR         AS DEPT_NAME,
+        v:BudgetUsd::NUMBER(18,2)   AS BUDGET_USD,
+        _DMS_OPERATION,
+        _DMS_COMMIT_TS
+    FROM MSSQL_MIGRATION_LAB.RAW_MSSQL.RAW_DMS_VARIANT
+    WHERE v:DeptId   IS NOT NULL
+      AND v:DeptCode IS NOT NULL
+      AND _DMS_COMMIT_TS > COALESCE(
+            (SELECT MAX(_DMS_COMMIT_TS) FROM MSSQL_MIGRATION_LAB.BRONZE.ERP_DEPARTMENTS
+             WHERE _DMS_COMMIT_TS IS NOT NULL),
+            '1970-01-01'::TIMESTAMP_NTZ
+          )
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY v:DeptId ORDER BY _DMS_COMMIT_TS DESC) = 1
+) src
+ON tgt.DEPT_ID = src.DEPT_ID
+WHEN MATCHED AND src._DMS_OPERATION = 'D' THEN DELETE
+WHEN MATCHED THEN UPDATE SET
+    DEPT_CODE      = src.DEPT_CODE,
+    DEPT_NAME      = src.DEPT_NAME,
+    BUDGET_USD     = src.BUDGET_USD,
+    _DMS_OPERATION = src._DMS_OPERATION,
+    _DMS_COMMIT_TS = src._DMS_COMMIT_TS,
+    _LOADED_AT     = CURRENT_TIMESTAMP()
+WHEN NOT MATCHED AND src._DMS_OPERATION <> 'D' THEN INSERT
+    (DEPT_ID, DEPT_CODE, DEPT_NAME, BUDGET_USD, _DMS_OPERATION, _DMS_COMMIT_TS)
+VALUES
+    (src.DEPT_ID, src.DEPT_CODE, src.DEPT_NAME, src.BUDGET_USD,
+     src._DMS_OPERATION, src._DMS_COMMIT_TS);
+
+
+-- ── ERP_EMPLOYEES ────────────────────────────────────────────────────────────
+MERGE INTO MSSQL_MIGRATION_LAB.BRONZE.ERP_EMPLOYEES tgt
+USING (
+    SELECT
+        v:EmployeeId::NUMBER        AS EMPLOYEE_ID,
+        v:DeptId::NUMBER            AS DEPT_ID,
+        v:EmpCode::VARCHAR          AS EMP_CODE,
+        v:FullName::VARCHAR         AS FULL_NAME,
+        v:HireDate::DATE            AS HIRE_DATE,
+        v:Salary::NUMBER(18,4)      AS SALARY,
+        _DMS_OPERATION,
+        _DMS_COMMIT_TS
+    FROM MSSQL_MIGRATION_LAB.RAW_MSSQL.RAW_DMS_VARIANT
+    WHERE v:EmployeeId IS NOT NULL
+      AND v:EmpCode    IS NOT NULL
+      AND _DMS_COMMIT_TS > COALESCE(
+            (SELECT MAX(_DMS_COMMIT_TS) FROM MSSQL_MIGRATION_LAB.BRONZE.ERP_EMPLOYEES
+             WHERE _DMS_COMMIT_TS IS NOT NULL),
+            '1970-01-01'::TIMESTAMP_NTZ
+          )
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY v:EmployeeId ORDER BY _DMS_COMMIT_TS DESC) = 1
+) src
+ON tgt.EMPLOYEE_ID = src.EMPLOYEE_ID
+WHEN MATCHED AND src._DMS_OPERATION = 'D' THEN DELETE
+WHEN MATCHED THEN UPDATE SET
+    DEPT_ID        = src.DEPT_ID,
+    EMP_CODE       = src.EMP_CODE,
+    FULL_NAME      = src.FULL_NAME,
+    HIRE_DATE      = src.HIRE_DATE,
+    SALARY         = src.SALARY,
+    _DMS_OPERATION = src._DMS_OPERATION,
+    _DMS_COMMIT_TS = src._DMS_COMMIT_TS,
+    _LOADED_AT     = CURRENT_TIMESTAMP()
+WHEN NOT MATCHED AND src._DMS_OPERATION <> 'D' THEN INSERT
+    (EMPLOYEE_ID, DEPT_ID, EMP_CODE, FULL_NAME, HIRE_DATE, SALARY,
+     _DMS_OPERATION, _DMS_COMMIT_TS)
+VALUES
+    (src.EMPLOYEE_ID, src.DEPT_ID, src.EMP_CODE, src.FULL_NAME, src.HIRE_DATE,
+     src.SALARY, src._DMS_OPERATION, src._DMS_COMMIT_TS);
+
+
+-- ── ERP_PAYROLL_RUNS ─────────────────────────────────────────────────────────
+MERGE INTO MSSQL_MIGRATION_LAB.BRONZE.ERP_PAYROLL_RUNS tgt
+USING (
+    SELECT
+        v:RunId::NUMBER             AS RUN_ID,
+        v:RunMonth::VARCHAR(7)      AS RUN_MONTH,
+        v:Status::VARCHAR           AS STATUS,
+        v:CreatedAt::TIMESTAMP_NTZ  AS CREATED_AT,
+        _DMS_OPERATION,
+        _DMS_COMMIT_TS
+    FROM MSSQL_MIGRATION_LAB.RAW_MSSQL.RAW_DMS_VARIANT
+    WHERE v:RunId    IS NOT NULL
+      AND v:RunMonth IS NOT NULL
+      AND _DMS_COMMIT_TS > COALESCE(
+            (SELECT MAX(_DMS_COMMIT_TS) FROM MSSQL_MIGRATION_LAB.BRONZE.ERP_PAYROLL_RUNS
+             WHERE _DMS_COMMIT_TS IS NOT NULL),
+            '1970-01-01'::TIMESTAMP_NTZ
+          )
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY v:RunId ORDER BY _DMS_COMMIT_TS DESC) = 1
+) src
+ON tgt.RUN_ID = src.RUN_ID
+WHEN MATCHED AND src._DMS_OPERATION = 'D' THEN DELETE
+WHEN MATCHED THEN UPDATE SET
+    RUN_MONTH      = src.RUN_MONTH,
+    STATUS         = src.STATUS,
+    CREATED_AT     = src.CREATED_AT,
+    _DMS_OPERATION = src._DMS_OPERATION,
+    _DMS_COMMIT_TS = src._DMS_COMMIT_TS,
+    _LOADED_AT     = CURRENT_TIMESTAMP()
+WHEN NOT MATCHED AND src._DMS_OPERATION <> 'D' THEN INSERT
+    (RUN_ID, RUN_MONTH, STATUS, CREATED_AT, _DMS_OPERATION, _DMS_COMMIT_TS)
+VALUES
+    (src.RUN_ID, src.RUN_MONTH, src.STATUS, src.CREATED_AT,
+     src._DMS_OPERATION, src._DMS_COMMIT_TS);
+
+
+-- ── ERP_PAYROLL_LINES ────────────────────────────────────────────────────────
+MERGE INTO MSSQL_MIGRATION_LAB.BRONZE.ERP_PAYROLL_LINES tgt
+USING (
+    SELECT
+        v:LineId::NUMBER            AS LINE_ID,
+        v:RunId::NUMBER             AS RUN_ID,
+        v:EmployeeId::NUMBER        AS EMPLOYEE_ID,
+        v:GrossPay::NUMBER(18,4)    AS GROSS_PAY,
+        v:NetPay::NUMBER(18,4)      AS NET_PAY,
+        _DMS_OPERATION,
+        _DMS_COMMIT_TS
+    FROM MSSQL_MIGRATION_LAB.RAW_MSSQL.RAW_DMS_VARIANT
+    WHERE v:LineId IS NOT NULL
+      AND v:RunId  IS NOT NULL
+      AND _DMS_COMMIT_TS > COALESCE(
+            (SELECT MAX(_DMS_COMMIT_TS) FROM MSSQL_MIGRATION_LAB.BRONZE.ERP_PAYROLL_LINES
+             WHERE _DMS_COMMIT_TS IS NOT NULL),
+            '1970-01-01'::TIMESTAMP_NTZ
+          )
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY v:LineId ORDER BY _DMS_COMMIT_TS DESC) = 1
+) src
+ON tgt.LINE_ID = src.LINE_ID
+WHEN MATCHED AND src._DMS_OPERATION = 'D' THEN DELETE
+WHEN MATCHED THEN UPDATE SET
+    RUN_ID         = src.RUN_ID,
+    EMPLOYEE_ID    = src.EMPLOYEE_ID,
+    GROSS_PAY      = src.GROSS_PAY,
+    NET_PAY        = src.NET_PAY,
+    _DMS_OPERATION = src._DMS_OPERATION,
+    _DMS_COMMIT_TS = src._DMS_COMMIT_TS,
+    _LOADED_AT     = CURRENT_TIMESTAMP()
+WHEN NOT MATCHED AND src._DMS_OPERATION <> 'D' THEN INSERT
+    (LINE_ID, RUN_ID, EMPLOYEE_ID, GROSS_PAY, NET_PAY, _DMS_OPERATION, _DMS_COMMIT_TS)
+VALUES
+    (src.LINE_ID, src.RUN_ID, src.EMPLOYEE_ID, src.GROSS_PAY, src.NET_PAY,
+     src._DMS_OPERATION, src._DMS_COMMIT_TS);
