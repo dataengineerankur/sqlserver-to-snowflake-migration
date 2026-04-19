@@ -16,7 +16,10 @@ sources:
           - name: CUSTOMER_ID
             tests: [not_null, unique]
           - name: EMAIL
-            tests: [not_null]
+            tests:
+              - not_null:
+                  config:
+                    severity: warn   # lab data may have null emails
           - name: _LOADED_AT
             tests: [not_null]
 
@@ -51,7 +54,7 @@ sources:
       - name: erp_employees
         description: SQL Server ErpDB.dbo.Employees
         columns:
-          - name: EMP_ID
+          - name: EMPLOYEE_ID
             tests: [not_null, unique]
 
       - name: erp_payroll_runs

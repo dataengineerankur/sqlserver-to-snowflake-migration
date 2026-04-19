@@ -12,12 +12,12 @@ terraform {
 }
 
 provider "snowflake" {
-  organization_name = "WBZTWSY"
-  account_name      = "KH99814"
-  user              = "PATCHIT"
-  role              = "ACCOUNTADMIN"
-  warehouse         = "COMPUTE_WH"
+  # Set via env vars: SNOWFLAKE_ORGANIZATION_NAME, SNOWFLAKE_ACCOUNT_NAME,
+  # SNOWFLAKE_USER, SNOWFLAKE_PASSWORD — never hardcode here.
+  # See .env.example at the repo root.
+  role      = var.snowflake_role
+  warehouse = var.snowflake_warehouse
   # Auth: password via SNOWFLAKE_PASSWORD env var (local + CI).
   # To use RSA key pair instead: set authenticator="SNOWFLAKE_JWT" and private_key=file(...)
-  # after running: ALTER USER PATCHIT SET RSA_PUBLIC_KEY='...' in Snowflake.
+  # after running: ALTER USER <user> SET RSA_PUBLIC_KEY='...' in Snowflake.
 }
