@@ -1,0 +1,4 @@
+# Temporal dynamic config for Airbyte OSS local development
+frontend.enableClientVersionCheck:
+  - value: false
+    constraints: {}
