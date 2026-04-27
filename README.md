@@ -161,6 +161,90 @@ MSSQL_HOST=<rds-endpoint> MSSQL_USER=admin MSSQL_PASSWORD=<your-rds-pass> ./run_
 
 ---
 
+### Already have an RDS SQL Server? Just deploy DMS
+
+If you created an RDS SQL Server instance yourself — through the console, CLI, or your own Terraform — you don't need this repo to provision RDS again. You can skip the RDS creation and use Terraform only to set up the DMS replication instance, endpoints, and task.
+
+Here's how to do it.
+
+**1. Tell Terraform not to create a new RDS instance**
+
+Open (or create) `infra/terraform/aws/terraform.tfvars` and set `use_rds = false`. Then provide the connection details for your existing instance:
+
+```hcl
+use_rds        = false
+mssql_host     = "your-existing-instance.xxxxxx.us-east-1.rds.amazonaws.com"
+mssql_port     = 1433
+mssql_db       = "SnowConvertStressDB"   # or whatever your source DB is named
+mssql_user     = "sa"
+mssql_password = "your-password"
+```
+
+When `use_rds = false`, Terraform skips creating the RDS subnet group, parameter group, security group, and DB instance entirely. It only creates the DMS replication instance, the source endpoint pointing at your host, the S3 target endpoint, and the replication task.
+
+**2. Make sure DMS can actually reach your RDS instance**
+
+This is the step people most often forget. DMS runs inside your VPC, so your existing RDS security group needs to allow inbound TCP on port 1433 from the DMS replication instance's security group. The easiest way to do this is to add an inbound rule on your RDS security group that allows traffic from the DMS security group. Terraform outputs the DMS security group ID after apply — you can add the rule manually in the console or reference it in your own Terraform config.
+
+If your RDS instance is in a different VPC than where DMS will run, you'll need VPC peering or a Transit Gateway — that's beyond the scope of this lab. The simplest setup is to let Terraform use your default VPC (leave `dms_vpc_id = null` and `dms_subnet_ids = []`) and make sure your RDS instance is also in that default VPC.
+
+**3. Run Terraform**
+
+```bash
+cd infra/terraform/aws
+terraform init -backend-config="bucket=${TF_STATE_BUCKET}" \
+               -backend-config="key=mssql-migration/aws/terraform.tfstate" \
+               -backend-config="region=${AWS_REGION}"
+terraform plan   # review — you should see DMS resources only, no aws_db_instance
+terraform apply
+```
+
+After apply you'll get outputs like `dms_replication_instance_arn` and `dms_replication_task_arn`. Save the task ARN — you'll use it to start the migration.
+
+**4. Enable CDC on your existing RDS SQL Server**
+
+Before starting DMS in CDC mode, CDC needs to be turned on at the database and table level. On RDS SQL Server, you do this through stored procedures rather than directly — Microsoft SQL Server on RDS uses a wrapper SP instead of the native `sys.sp_cdc_enable_db`:
+
+```sql
+-- Connect to your RDS instance as the master user
+USE SnowConvertStressDB
+GO
+
+-- Enable CDC on the database (RDS-specific wrapper)
+EXEC msdb.dbo.rds_cdc_enable_db 'SnowConvertStressDB'
+GO
+
+-- Enable CDC on each table you want to replicate
+EXEC sys.sp_cdc_enable_table
+    @source_schema = 'dbo',
+    @source_name   = 'Orders',
+    @role_name     = NULL
+GO
+-- Repeat for each table (Customers, Products, OrderItems, etc.)
+```
+
+If you're only doing a one-time full load (no ongoing CDC), you can skip this step — DMS full-load mode doesn't require CDC to be enabled.
+
+**5. Start the DMS task**
+
+```bash
+aws dms start-replication-task \
+    --replication-task-arn $(terraform output -raw dms_replication_task_arn) \
+    --start-replication-task-type start-replication
+```
+
+Watch progress in the AWS console under Database Migration Service → Replication tasks, or poll via CLI:
+
+```bash
+aws dms describe-replication-tasks \
+    --filters Name=replication-task-arn,Values=$(terraform output -raw dms_replication_task_arn) \
+    --query 'ReplicationTasks[0].{Status:Status,Progress:ReplicationTaskStats.FullLoadProgressPercent}'
+```
+
+Once the task shows `Load complete`, your Parquet files are in S3 and Snowpipe will pick them up automatically. Continue from Step 3 (Snowflake setup) from here.
+
+---
+
 ## Step 3 — Set up Snowflake
 
 ```bash
