@@ -4,20 +4,20 @@ project_name                   = "dms-snowpipe"
 environment                    = "dev"
 bucket_name                    = ""
 
-postgres_host                  = ""
-postgres_port                  = 5432
-postgres_db                    = "source_db"
-postgres_user                  = "app_user"
-postgres_password              = "replace-me"
+mssql_host                     = ""          # only used when use_rds = false
+mssql_port                     = 1433
+mssql_db                       = "SnowConvertStressDB"
+mssql_user                     = "sa"
+mssql_password                 = "replace-me"
 
 dms_replication_instance_class = "dms.t3.medium"
 dms_allocated_storage_gb       = 50
 
 use_rds                        = true
-rds_instance_class             = "db.t3.micro"
+rds_instance_class             = "db.t3.small"   # SQL Server SE minimum
 rds_allocated_storage_gb       = 20
-rds_engine_version             = "15.16"
-rds_parameter_group_family     = "postgres15"
+rds_engine_version             = "15.00.4335.1.v1"
+rds_parameter_group_family     = "sqlserver-se-15.0"
 rds_publicly_accessible        = true
 rds_allowed_cidrs              = ["YOUR_PUBLIC_IP/32"]
 

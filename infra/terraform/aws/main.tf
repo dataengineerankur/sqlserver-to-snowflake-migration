@@ -26,7 +26,7 @@ locals {
 
   bucket_name = var.bucket_name != "" ? var.bucket_name : "${var.project_name}-${var.environment}-${random_id.bucket_suffix.hex}"
 
-  source_host = var.use_rds ? aws_db_instance.source[0].address : var.postgres_host
+  source_host = var.use_rds ? aws_db_instance.source[0].address : var.mssql_host
 
   redshift_enabled = var.enable_redshift || var.enable_redshift_serverless
 
@@ -187,8 +187,8 @@ resource "aws_security_group" "rds" {
 resource "aws_security_group_rule" "rds_from_dms" {
   count                    = var.use_rds ? 1 : 0
   type                     = "ingress"
-  from_port                = 5432
-  to_port                  = 5432
+  from_port                = 1433
+  to_port                  = 1433
   protocol                 = "tcp"
   security_group_id        = aws_security_group.rds[0].id
   source_security_group_id = aws_security_group.dms.id
@@ -197,8 +197,8 @@ resource "aws_security_group_rule" "rds_from_dms" {
 resource "aws_security_group_rule" "rds_from_cidrs" {
   count             = var.use_rds && length(var.rds_allowed_cidrs) > 0 ? 1 : 0
   type              = "ingress"
-  from_port         = 5432
-  to_port           = 5432
+  from_port         = 1433
+  to_port           = 1433
   protocol          = "tcp"
   security_group_id = aws_security_group.rds[0].id
   cidr_blocks       = var.rds_allowed_cidrs
@@ -221,16 +221,16 @@ resource "aws_dms_replication_instance" "dms" {
 }
 
 resource "aws_dms_endpoint" "source" {
-  endpoint_id   = "${var.project_name}-${var.environment}-pg-source"
+  endpoint_id   = "${var.project_name}-${var.environment}-mssql-source"
   endpoint_type = "source"
-  engine_name   = "postgres"
+  engine_name   = "sqlserver"
 
   server_name   = local.source_host
-  port          = var.postgres_port
-  database_name = var.postgres_db
-  username      = var.postgres_user
-  password      = var.postgres_password
-  ssl_mode      = "require"
+  port          = var.mssql_port
+  database_name = var.mssql_db
+  username      = var.mssql_user
+  password      = var.mssql_password
+  ssl_mode      = "none"
 }
 
 resource "aws_dms_endpoint" "target" {
@@ -275,38 +275,25 @@ resource "aws_db_parameter_group" "rds" {
   count  = var.use_rds ? 1 : 0
   name   = "${var.project_name}-${var.environment}-rds-params"
   family = var.rds_parameter_group_family
-
-  parameter {
-    apply_method = "pending-reboot"
-    name  = "rds.logical_replication"
-    value = "1"
-  }
-
-  parameter {
-    apply_method = "pending-reboot"
-    name  = "max_replication_slots"
-    value = "5"
-  }
-
-  parameter {
-    apply_method = "pending-reboot"
-    name  = "max_wal_senders"
-    value = "5"
-  }
+  # SQL Server CDC is enabled at DB/table level via T-SQL stored procedures:
+  #   EXEC msdb.dbo.rds_cdc_enable_db 'YourDatabase'
+  #   EXEC sys.sp_cdc_enable_table ...
+  # No extra parameter group settings are needed for DMS CDC with SQL Server.
 }
 
 resource "aws_db_instance" "source" {
   count                   = var.use_rds ? 1 : 0
-  identifier              = "${var.project_name}-${var.environment}-pg"
-  engine                  = "postgres"
+  identifier              = "${var.project_name}-${var.environment}-mssql"
+  engine                  = "sqlserver-se"
   engine_version          = var.rds_engine_version
   instance_class          = var.rds_instance_class
   allocated_storage       = var.rds_allocated_storage_gb
   db_subnet_group_name    = aws_db_subnet_group.rds[0].name
   vpc_security_group_ids  = [aws_security_group.rds[0].id]
-  db_name                 = var.postgres_db
-  username                = var.postgres_user
-  password                = var.postgres_password
+  # SQL Server RDS does not accept db_name — databases are created via T-SQL after provisioning
+  username                = var.mssql_user
+  password                = var.mssql_password
+  license_model           = "license-included"
   parameter_group_name    = aws_db_parameter_group.rds[0].name
   publicly_accessible     = var.rds_publicly_accessible
   skip_final_snapshot     = true

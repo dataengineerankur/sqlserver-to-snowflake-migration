@@ -26,44 +26,44 @@ variable "bucket_name" {
   default     = ""
 }
 
-variable "postgres_host" {
+variable "mssql_host" {
   type        = string
-  description = "Postgres host accessible by DMS."
+  description = "SQL Server host accessible by DMS (used when use_rds = false)."
   default     = ""
 }
 
-variable "postgres_port" {
+variable "mssql_port" {
   type        = number
-  description = "Postgres port."
-  default     = 5432
+  description = "SQL Server port."
+  default     = 1433
 }
 
-variable "postgres_db" {
+variable "mssql_db" {
   type        = string
-  description = "Postgres database name."
+  description = "SQL Server database name to replicate."
 }
 
-variable "postgres_user" {
+variable "mssql_user" {
   type        = string
-  description = "Postgres username."
+  description = "SQL Server username."
 }
 
-variable "postgres_password" {
+variable "mssql_password" {
   type        = string
-  description = "Postgres password."
+  description = "SQL Server password."
   sensitive   = true
 }
 
 variable "use_rds" {
   type        = bool
-  description = "Whether to create an RDS Postgres instance."
+  description = "Whether to create an RDS SQL Server instance. Set false to point DMS at an existing SQL Server."
   default     = true
 }
 
 variable "rds_instance_class" {
   type        = string
-  description = "RDS instance class."
-  default     = "db.t3.micro"
+  description = "RDS instance class. SQL Server SE minimum is db.t3.small."
+  default     = "db.t3.small"
 }
 
 variable "rds_allocated_storage_gb" {
@@ -74,14 +74,14 @@ variable "rds_allocated_storage_gb" {
 
 variable "rds_engine_version" {
   type        = string
-  description = "RDS Postgres engine version."
-  default     = "14.11"
+  description = "RDS SQL Server engine version."
+  default     = "15.00.4335.1.v1"
 }
 
 variable "rds_parameter_group_family" {
   type        = string
-  description = "RDS parameter group family."
-  default     = "postgres15"
+  description = "RDS parameter group family for SQL Server."
+  default     = "sqlserver-se-15.0"
 }
 
 variable "rds_publicly_accessible" {

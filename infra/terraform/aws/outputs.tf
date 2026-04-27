@@ -140,12 +140,12 @@ output "dms_replication_task_arn" {
 
 output "rds_endpoint" {
   value       = var.use_rds ? aws_db_instance.source[0].address : ""
-  description = "RDS Postgres endpoint address."
+  description = "RDS SQL Server endpoint address."
 }
 
 output "rds_port" {
-  value       = var.use_rds ? aws_db_instance.source[0].port : 5432
-  description = "RDS Postgres port."
+  value       = var.use_rds ? aws_db_instance.source[0].port : 1433
+  description = "RDS SQL Server port."
 }
 
 output "rds_security_group_id" {
