@@ -134,8 +134,9 @@ variable "redshift_master_username" {
 
 variable "redshift_master_password" {
   type        = string
-  description = "Redshift master password."
+  description = "Redshift master password. Only required when enable_redshift or enable_redshift_serverless = true."
   sensitive   = true
+  default     = ""
 }
 
 variable "redshift_node_type" {

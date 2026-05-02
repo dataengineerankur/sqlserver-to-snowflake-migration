@@ -259,8 +259,8 @@ resource "aws_dms_replication_task" "full_load_cdc" {
   source_endpoint_arn       = aws_dms_endpoint.source.endpoint_arn
   target_endpoint_arn       = aws_dms_endpoint.target.endpoint_arn
   migration_type            = "full-load-and-cdc"
-  table_mappings            = file("${path.module}/table_mappings.json")
-  replication_task_settings = file("${path.module}/dms_task_settings.json")
+  table_mappings            = file("${path.module}/../../../dms/table_mappings.json")
+  replication_task_settings = file("${path.module}/../../../dms/dms_task_settings.json")
   start_replication_task    = false
 }
 
@@ -571,8 +571,8 @@ resource "aws_s3_object" "glue_script" {
   count  = local.redshift_enabled ? 1 : 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/redshift_load.py"
-  source = "${path.module}/../../scripts/glue/redshift_load.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/redshift_load.py")
+  source = "${path.module}/../../../scripts/glue/redshift_load.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/redshift_load.py")
 }
 
 resource "aws_glue_job" "silver_transform" {
@@ -627,72 +627,72 @@ resource "aws_s3_object" "glue_silver_script" {
   count  = 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/silver_transform.py"
-  source = "${path.module}/../../scripts/glue/silver_transform.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/silver_transform.py")
+  source = "${path.module}/../../../scripts/glue/silver_transform.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/silver_transform.py")
 }
 
 resource "aws_s3_object" "glue_gold_script" {
   count  = 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/gold_transform.py"
-  source = "${path.module}/../../scripts/glue/gold_transform.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/gold_transform.py")
+  source = "${path.module}/../../../scripts/glue/gold_transform.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/gold_transform.py")
 }
 
 resource "aws_s3_object" "glue_silver_customers_script" {
   count  = var.enable_glue_athena ? 1 : 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/silver_customers.py"
-  source = "${path.module}/../../scripts/glue/silver_customers.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/silver_customers.py")
+  source = "${path.module}/../../../scripts/glue/silver_customers.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/silver_customers.py")
 }
 
 resource "aws_s3_object" "glue_silver_products_script" {
   count  = var.enable_glue_athena ? 1 : 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/silver_products.py"
-  source = "${path.module}/../../scripts/glue/silver_products.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/silver_products.py")
+  source = "${path.module}/../../../scripts/glue/silver_products.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/silver_products.py")
 }
 
 resource "aws_s3_object" "glue_silver_orders_script" {
   count  = var.enable_glue_athena ? 1 : 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/silver_orders.py"
-  source = "${path.module}/../../scripts/glue/silver_orders.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/silver_orders.py")
+  source = "${path.module}/../../../scripts/glue/silver_orders.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/silver_orders.py")
 }
 
 resource "aws_s3_object" "glue_gold_customers_script" {
   count  = var.enable_glue_athena ? 1 : 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/gold_customers.py"
-  source = "${path.module}/../../scripts/glue/gold_customers.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/gold_customers.py")
+  source = "${path.module}/../../../scripts/glue/gold_customers.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/gold_customers.py")
 }
 
 resource "aws_s3_object" "glue_gold_products_script" {
   count  = var.enable_glue_athena ? 1 : 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/gold_products.py"
-  source = "${path.module}/../../scripts/glue/gold_products.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/gold_products.py")
+  source = "${path.module}/../../../scripts/glue/gold_products.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/gold_products.py")
 }
 
 resource "aws_s3_object" "glue_gold_orders_script" {
   count  = var.enable_glue_athena ? 1 : 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/gold_orders.py"
-  source = "${path.module}/../../scripts/glue/gold_orders.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/gold_orders.py")
+  source = "${path.module}/../../../scripts/glue/gold_orders.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/gold_orders.py")
 }
 
 resource "aws_s3_object" "glue_raw_ingest_script" {
   count  = var.enable_datalake_ingest ? 1 : 0
   bucket = aws_s3_bucket.dms.bucket
   key    = "glue/raw_ingest.py"
-  source = "${path.module}/../../scripts/glue/raw_ingest.py"
-  etag   = filemd5("${path.module}/../../scripts/glue/raw_ingest.py")
+  source = "${path.module}/../../../scripts/glue/raw_ingest.py"
+  etag   = filemd5("${path.module}/../../../scripts/glue/raw_ingest.py")
 }
 
 resource "aws_glue_job" "silver_customers" {
